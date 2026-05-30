@@ -27,16 +27,23 @@ Desde la raiz del backend (`pfg-backend`):
 
 ```powershell
 python -m venv venv
+.\venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+Opcionalmente puedes activar el entorno antes de instalar:
+
+```powershell
 .\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
+
+Si `Activate.ps1` no existe, vuelve a ejecutar `python -m venv venv` desde la carpeta `pfg-backend` y comprueba que se haya creado `venv\Scripts\python.exe`.
 
 En Linux/macOS:
 
 ```bash
 python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+./venv/bin/python -m pip install -r requirements.txt
 ```
 
 ## Configuracion
@@ -60,7 +67,7 @@ Variables principales:
 ## Ejecucion
 
 ```powershell
-uvicorn app.main:app --reload
+.\venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
 
 El backend crea las tablas con SQLAlchemy al arrancar y crea un usuario de prueba si no existe:
@@ -127,19 +134,19 @@ Si la decision es `ESPERA` o `BLOQUEO`, el backend identifica `weakest_metric` y
 Ejecutar toda la suite:
 
 ```powershell
-pytest tests/ -v
+.\venv\Scripts\python.exe -m pytest tests/ -v
 ```
 
 Ejecutar unitarios:
 
 ```powershell
-pytest tests/unit/ -v
+.\venv\Scripts\python.exe -m pytest tests/unit/ -v
 ```
 
 Ejecutar integracion:
 
 ```powershell
-pytest tests/integration/ -v
+.\venv\Scripts\python.exe -m pytest tests/integration/ -v
 ```
 
 Los tests de integracion usan SQLite en memoria y no modifican la base PostgreSQL local.
