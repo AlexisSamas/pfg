@@ -13,7 +13,7 @@ from app.database.session import engine, SessionLocal
 from app.database.init_db import init_db
 from app.models.user import User
 from app.auth.password import get_password_hash
-from app.routers import auth, sessions
+from app.routers import auth, dashboard, sessions
 
 
 def create_test_user():
@@ -61,6 +61,7 @@ app = FastAPI(
 # Registrar routers
 app.include_router(auth.router)
 app.include_router(sessions.router)
+app.include_router(dashboard.router)
 
 
 @app.get("/", tags=["health"])

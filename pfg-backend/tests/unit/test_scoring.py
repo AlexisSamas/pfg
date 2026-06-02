@@ -1,3 +1,5 @@
+"""Unit tests del servicio de scoring segun la especificacion de la memoria."""
+
 import pytest
 
 from app.services.scoring import (

@@ -10,7 +10,12 @@ from app.models.wait_period import WaitPeriod
 from app.schemas.exam_session import SessionCreate, SessionResponse
 from app.schemas.game_event import GameEventBatch, GameEventBatchResponse
 from app.schemas.scoring import DecisionResponse, ScoringResultResponse, WaitResponse
-from app.services.session import WaitPeriodException, create_exam_session
+from app.services.session import (
+    BlockedContextException,
+    MaxAttemptsExceededException,
+    WaitPeriodException,
+    create_exam_session,
+)
 from app.services.events import save_game_events, SessionException, GameEventException
 from app.services.scoring import (
     ScoringException,
@@ -36,7 +41,27 @@ def create_session(
     except WaitPeriodException as exc:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=str(exc),
+            detail=exc.detail or str(exc),
+        ) from exc
+    except BlockedContextException as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "message": "User is blocked for this context",
+                "context_id": exc.context_id,
+                "requires_manual_grant": True,
+                "reason": "BLOCK decision",
+            },
+        ) from exc
+    except MaxAttemptsExceededException as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "message": "Maximum attempts exceeded",
+                "max_attempts": exc.max_attempts,
+                "context_id": exc.context_id,
+                "requires_manual_grant": True,
+            },
         ) from exc
 
 

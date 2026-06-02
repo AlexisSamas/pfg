@@ -30,5 +30,14 @@ class Settings:
     DEFAULT_WAIT_MINUTES: int = int(os.getenv("DEFAULT_WAIT_MINUTES", "10"))
     MAX_ATTEMPTS: int = int(os.getenv("MAX_ATTEMPTS", "3"))
 
+    # Redis: cache temporal para cooldowns. PostgreSQL sigue siendo la fuente persistente.
+    REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    ENABLE_REDIS: bool = os.getenv("ENABLE_REDIS", "false").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
 
 settings = Settings()

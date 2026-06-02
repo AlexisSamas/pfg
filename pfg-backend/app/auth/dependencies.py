@@ -39,3 +39,14 @@ def get_current_user(
         raise credentials_exception
 
     return user
+
+
+def require_instructor(current_user: User = Depends(get_current_user)) -> User:
+    """Return the authenticated user only if it has instructor privileges."""
+    if current_user.role != "instructor":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Se requiere rol instructor",
+        )
+
+    return current_user

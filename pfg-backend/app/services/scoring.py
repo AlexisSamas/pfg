@@ -22,6 +22,7 @@ from app.models.scoring_result import ScoringResult
 from app.models.wait_period import WaitPeriod
 from app.models.access_decision import AccessDecision
 from app.core.config import settings
+from app.services import cooldown_cache
 
 
 DECISION_ACCESS = "ACCESO"
@@ -657,7 +658,7 @@ def calculate_and_store_scoring_result(
     el endpoint idempotente.
     """
     if session.scoring_result is not None:
-        _ensure_wait_period_for_result(
+        wait_period = _ensure_wait_period_for_result(
             db=db,
             session=session,
             scoring_result=session.scoring_result,
@@ -667,6 +668,8 @@ def calculate_and_store_scoring_result(
             if session.completed_at is None:
                 session.completed_at = datetime.utcnow()
         db.commit()
+        if wait_period is not None:
+            cooldown_cache.set_cooldown_from_wait_period(wait_period)
         db.refresh(session.scoring_result)
         return session.scoring_result
 
@@ -727,12 +730,14 @@ def calculate_and_store_scoring_result(
     session.status = "completed"
     session.completed_at = datetime.utcnow()
     db.add(scoring_result)
-    _ensure_wait_period_for_result(
+    wait_period = _ensure_wait_period_for_result(
         db=db,
         session=session,
         scoring_result=scoring_result,
     )
     db.commit()
+    if wait_period is not None:
+        cooldown_cache.set_cooldown_from_wait_period(wait_period)
     db.refresh(scoring_result)
 
     return scoring_result

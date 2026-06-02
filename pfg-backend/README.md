@@ -8,7 +8,9 @@ Backend REST para un prototipo de evaluacion cognitiva mediante juegos serios. P
 - FastAPI
 - Uvicorn
 - SQLAlchemy
+- Alembic
 - PostgreSQL
+- Redis
 - Pydantic
 - python-dotenv
 - python-jose para JWT
@@ -57,6 +59,8 @@ Copy-Item .env.example .env
 Variables principales:
 
 - `DATABASE_URL`: URL de conexion a PostgreSQL. Ejemplo: `postgresql://postgres:postgres@localhost:5432/pfg_db`.
+- `REDIS_URL`: URL de Redis para cache temporal de cooldown. Ejemplo: `redis://localhost:6379/0`.
+- `ENABLE_REDIS`: activa Redis cuando vale `true`, `1`, `yes` u `on`. En local puede dejarse en `false`.
 - `SECRET_KEY`: clave usada para firmar JWT. Cambiarla fuera de desarrollo.
 - `ALGORITHM`: algoritmo JWT, por defecto `HS256`.
 - `ACCESS_TOKEN_EXPIRE_MINUTES`: duracion del token de acceso.
@@ -64,16 +68,76 @@ Variables principales:
 - `DEFAULT_WAIT_MINUTES`: minutos de cooldown cuando la decision es `ESPERA`.
 - `MAX_ATTEMPTS`: limite previsto de intentos.
 
-## Ejecucion
+## Ejecucion Local Sin Docker
 
 ```powershell
 .\venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
 
-El backend crea las tablas con SQLAlchemy al arrancar y crea un usuario de prueba si no existe:
+El backend conserva una inicializacion automatica con SQLAlchemy para desarrollo rapido y compatibilidad con tests. Para PostgreSQL y Docker, la forma recomendada de crear o actualizar el esquema es usar Alembic.
+
+Al arrancar, el backend crea un usuario de prueba si no existe:
 
 - usuario: `testuser`
 - password: `secret`
+
+## Ejecucion Con Docker Compose
+
+Desde la raiz del backend (`pfg-backend`):
+
+```powershell
+docker compose up -d --build
+docker compose exec backend alembic upgrade head
+```
+
+Swagger queda disponible en:
+
+```text
+http://localhost:8000/docs
+```
+
+Para parar los contenedores:
+
+```powershell
+docker compose down
+```
+
+Para parar y borrar el volumen de PostgreSQL:
+
+```powershell
+docker compose down -v
+```
+
+## Migraciones Alembic
+
+Alembic versiona el esquema de base de datos. Para crear o actualizar la BD local:
+
+```powershell
+.\venv\Scripts\python.exe -m alembic upgrade head
+```
+
+Crear una nueva migracion a partir de cambios en modelos:
+
+```powershell
+.\venv\Scripts\python.exe -m alembic revision --autogenerate -m "mensaje"
+```
+
+Usando Docker:
+
+```powershell
+docker compose up -d --build
+docker compose exec backend alembic upgrade head
+```
+
+Para reiniciar PostgreSQL desde cero y aplicar migraciones:
+
+```powershell
+docker compose down -v
+docker compose up -d --build
+docker compose exec backend alembic upgrade head
+```
+
+Si el volumen de Docker ya contiene tablas creadas previamente con `Base.metadata.create_all`, `alembic upgrade head` puede fallar con `table already exists`. En ese caso, usa el reinicio limpio anterior o marca manualmente la revision solo si sabes que el esquema existente coincide.
 
 ## Swagger
 
@@ -93,6 +157,18 @@ Desde Swagger puedes autenticarte en `/auth/token`, copiar el token Bearer y usa
 - `GET /sessions/{id}/result`: calcula o devuelve el resultado de scoring.
 - `GET /sessions/{id}/decision`: consulta la decision final persistida.
 - `GET /sessions/{id}/wait`: consulta el periodo de espera asociado si existe.
+- `GET /dashboard/context/{ctx_id}`: consulta el estado de usuarios de un contexto. Requiere rol `instructor`.
+- `POST /dashboard/grant-manual`: concede acceso manual a un usuario. Requiere rol `instructor`.
+
+Ejemplo de concesion manual:
+
+```json
+{
+  "user_id": 123,
+  "context_id": "exam_test_01",
+  "reason": "Acceso concedido manualmente por el docente"
+}
+```
 
 ## Modelo Funcional
 
@@ -110,6 +186,14 @@ Entidades principales persistidas:
 - `scoring_results`: metricas, score global, decision y recomendacion.
 - `wait_periods`: cooldown cuando la decision es `ESPERA`.
 - `access_decisions`: registro consultable de la decision final.
+
+Redis se usa como cache temporal para cooldowns activos con claves:
+
+```text
+cooldown:{user_id}:{context_id}
+```
+
+El valor guardado incluye `wait_until`, `recommendation_key` y `reason`, con TTL calculado hasta `wait_until`. PostgreSQL mantiene `wait_periods` como fuente persistente y auditable. Si Redis no esta disponible, el backend sigue funcionando con PostgreSQL.
 
 ## Scoring Y Decisiones
 
@@ -149,6 +233,12 @@ Ejecutar integracion:
 .\venv\Scripts\python.exe -m pytest tests/integration/ -v
 ```
 
+Estructura principal:
+
+- `tests/unit/test_scoring.py`: unitarios de scoring segun la memoria.
+- `tests/unit/test_cooldown.py`: unitarios del servicio de cooldown Redis/fallback PostgreSQL. Existe porque Redis forma parte del stack tecnologico del backend.
+- `tests/integration/test_session_flow.py`: integracion del flujo API principal segun la memoria.
+
 Los tests de integracion usan SQLite en memoria y no modifican la base PostgreSQL local.
 
 ## Flujo Basico De Uso
@@ -163,5 +253,9 @@ Los tests de integracion usan SQLite en memoria y no modifican la base PostgreSQ
 ## Notas
 
 - Si existe un `wait_period` activo para el mismo usuario y `context_id`, `POST /sessions` devuelve `429 Too Many Requests`.
+- Si Redis esta activo, `POST /sessions` consulta primero la clave `cooldown:{user_id}:{context_id}` y usa PostgreSQL como fallback.
 - Si el `wait_period` expiro, se permite crear un nuevo intento.
-- El frontend y dashboard no forman parte de este backend en esta fase.
+- `MAX_ATTEMPTS` limita el numero de sesiones que un usuario puede crear para el mismo `context_id`.
+- Si se alcanza `MAX_ATTEMPTS`, `POST /sessions` devuelve `403 Forbidden` e indica que se requiere concesion manual docente.
+- `POST /dashboard/grant-manual` concede acceso directamente mediante `access_decisions`; no reinicia el contador de intentos.
+- El frontend no forma parte de este backend en esta fase.
