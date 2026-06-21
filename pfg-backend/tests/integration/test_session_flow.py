@@ -9,11 +9,12 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.auth.password import get_password_hash
+from app.auth.jwt_service import decode_access_token
 from app.core.config import settings
 from app.database.base import Base
 from app.database.session import get_db
 from app.main import app
-from app.models import AccessDecision, ScoringResult, User, WaitPeriod
+from app.models import AccessDecision, ExamSession, ScoringResult, User, WaitPeriod
 from app.services.cooldown_cache import CooldownInfo
 
 
@@ -108,6 +109,49 @@ def instructor_headers(client):
     assert response.status_code == 200
     token = response.json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
+
+
+def login_payload(client, username="student", password="secret123"):
+    response = client.post(
+        "/auth/token",
+        json={"username": username, "password": password},
+    )
+    assert response.status_code == 200
+    return decode_access_token(response.json()["access_token"])
+
+
+def get_user(db_session, username="student"):
+    return db_session.query(User).filter(User.username == username).first()
+
+
+def add_scored_session(
+    db_session,
+    user,
+    context_id="exam-jwt",
+    score=75.0,
+    decision="ACCESO",
+):
+    session = ExamSession(
+        user_id=user.id,
+        context_id=context_id,
+        attempt_number=1,
+        status="completed",
+        completed_at=datetime.utcnow(),
+    )
+    db_session.add(session)
+    db_session.commit()
+    scoring_result = ScoringResult(
+        session_id=session.id,
+        score=score,
+        decision=decision,
+        weakest_metric="d_prime",
+        recommendation_key="low_dprime" if decision != "ACCESO" else "none",
+        computed_at=datetime.utcnow(),
+    )
+    db_session.add(scoring_result)
+    db_session.commit()
+    db_session.refresh(session)
+    return session, scoring_result
 
 
 def cpt_events(good=True):
@@ -373,6 +417,177 @@ def test_login_returns_token(client):
     assert response.json()["access_token"]
 
 
+def test_login_without_evaluation_has_null_last_evaluation(client):
+    payload = login_payload(client)
+
+    assert payload["role"] == "student"
+    assert payload["last_evaluation"] is None
+
+
+def test_login_with_previous_evaluation_includes_last_evaluation(
+    client,
+    db_session,
+):
+    user = get_user(db_session)
+    session, scoring_result = add_scored_session(
+        db_session=db_session,
+        user=user,
+        context_id="exam-login-claim",
+        score=75.0,
+        decision="ACCESO",
+    )
+
+    payload = login_payload(client)
+
+    assert payload["last_evaluation"]["session_id"] == session.id
+    assert payload["last_evaluation"]["context_id"] == "exam-login-claim"
+    assert payload["last_evaluation"]["score"] == scoring_result.score
+    assert payload["last_evaluation"]["decision"] == "ACCESO"
+
+
+def test_login_with_wait_result_includes_wait_until(client, db_session):
+    user = get_user(db_session)
+    session, _ = add_scored_session(
+        db_session=db_session,
+        user=user,
+        context_id="exam-login-wait",
+        score=55.0,
+        decision="ESPERA",
+    )
+    wait_until = datetime.utcnow() + timedelta(minutes=10)
+    db_session.add(
+        WaitPeriod(
+            user_id=user.id,
+            context_id=session.context_id,
+            attempt_number=session.attempt_number,
+            wait_until=wait_until,
+            reason="decision_espera",
+            recommendation_key="low_dprime",
+        )
+    )
+    db_session.commit()
+
+    payload = login_payload(client)
+
+    assert payload["last_evaluation"]["decision"] == "ESPERA"
+    assert payload["last_evaluation"]["wait_until"] is not None
+    assert datetime.fromisoformat(
+        payload["last_evaluation"]["wait_until"].replace("Z", "+00:00")
+    )
+
+
+def test_login_with_expired_wait_result_keeps_wait_until(client, db_session):
+    user = get_user(db_session)
+    session, _ = add_scored_session(
+        db_session=db_session,
+        user=user,
+        context_id="exam-login-expired-wait",
+        score=55.0,
+        decision="ESPERA",
+    )
+    wait_until = datetime.utcnow() - timedelta(minutes=1)
+    db_session.add(
+        WaitPeriod(
+            user_id=user.id,
+            context_id=session.context_id,
+            attempt_number=session.attempt_number,
+            wait_until=wait_until,
+            reason="decision_espera",
+            recommendation_key="low_dprime",
+        )
+    )
+    db_session.commit()
+
+    payload = login_payload(client)
+
+    assert payload["last_evaluation"]["decision"] == "ESPERA"
+    assert payload["last_evaluation"]["wait_until"] is not None
+    assert datetime.fromisoformat(
+        payload["last_evaluation"]["wait_until"].replace("Z", "+00:00")
+    )
+
+
+def test_login_with_wait_result_falls_back_to_context_wait_period(
+    client,
+    db_session,
+):
+    user = get_user(db_session)
+    session, _ = add_scored_session(
+        db_session=db_session,
+        user=user,
+        context_id="exam_demo_05",
+        score=57.0,
+        decision="ESPERA",
+    )
+    wait_until = datetime.utcnow() - timedelta(minutes=1)
+    db_session.add(
+        WaitPeriod(
+            user_id=user.id,
+            context_id=session.context_id,
+            attempt_number=session.attempt_number + 1,
+            wait_until=wait_until,
+            reason="decision_espera",
+            recommendation_key="high_stroop_error_rate",
+        )
+    )
+    db_session.commit()
+
+    payload = login_payload(client)
+
+    assert payload["last_evaluation"]["session_id"] == session.id
+    assert payload["last_evaluation"]["context_id"] == "exam_demo_05"
+    assert payload["last_evaluation"]["decision"] == "ESPERA"
+    assert payload["last_evaluation"]["wait_until"] is not None
+    assert datetime.fromisoformat(
+        payload["last_evaluation"]["wait_until"].replace("Z", "+00:00")
+    )
+
+
+def test_login_with_block_result_requires_manual_grant(client, db_session):
+    user = get_user(db_session)
+    add_scored_session(
+        db_session=db_session,
+        user=user,
+        context_id="exam-login-block",
+        score=20.0,
+        decision="BLOQUEO",
+    )
+
+    payload = login_payload(client)
+
+    assert payload["last_evaluation"]["decision"] == "BLOQUEO"
+    assert payload["last_evaluation"]["requires_manual_grant"] is True
+
+
+def test_login_after_manual_grant_reflects_access(client, db_session):
+    user = get_user(db_session)
+    session, scoring_result = add_scored_session(
+        db_session=db_session,
+        user=user,
+        context_id="exam-login-manual",
+        score=20.0,
+        decision="BLOQUEO",
+    )
+    db_session.add(
+        AccessDecision(
+            session_id=session.id,
+            user_id=user.id,
+            context_id=session.context_id,
+            decision="ACCESO",
+            score=scoring_result.score,
+            consumed_by="manual_grant",
+            consumed_at=datetime.utcnow() + timedelta(seconds=1),
+        )
+    )
+    db_session.commit()
+
+    payload = login_payload(client)
+
+    assert payload["last_evaluation"]["decision"] == "ACCESO"
+    assert payload["last_evaluation"]["manual_grant"] is True
+    assert payload["last_evaluation"]["requires_manual_grant"] is False
+
+
 def test_create_session_requires_token(client):
     response = client.post("/sessions", json={"context_id": "exam-no-token"})
 
@@ -466,6 +681,93 @@ def test_events_result_decision_and_wait_flow(
     )
     assert retry_after_expiry.status_code == 201
     assert retry_after_expiry.json()["attempt_number"] == 2
+
+
+def test_result_returns_updated_access_token(client, auth_headers):
+    session = create_session(client, auth_headers, "exam-result-token")
+    send_events(client, auth_headers, session["id"], access_events())
+
+    response = client.get(
+        f"/sessions/{session['id']}/result",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    new_access_token = result["new_access_token"]
+    assert new_access_token
+    payload = decode_access_token(new_access_token)
+    assert payload["last_evaluation"]["session_id"] == session["id"]
+    assert payload["last_evaluation"]["context_id"] == "exam-result-token"
+    assert payload["last_evaluation"]["decision"] == result["decision"]
+
+
+def test_wait_result_returns_updated_access_token_with_wait_until(
+    client,
+    auth_headers,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "app.services.scoring.cooldown_cache.set_cooldown_from_wait_period",
+        lambda wait_period: True,
+    )
+    session = create_session(client, auth_headers, "exam-result-token-wait")
+    send_events(client, auth_headers, session["id"], wait_events())
+
+    response = client.get(
+        f"/sessions/{session['id']}/result",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["decision"] == "ESPERA"
+    new_access_token = result["new_access_token"]
+    assert new_access_token
+    payload = decode_access_token(new_access_token)
+    assert payload["last_evaluation"]["session_id"] == session["id"]
+    assert payload["last_evaluation"]["decision"] == "ESPERA"
+    assert payload["last_evaluation"]["wait_until"] is not None
+    assert datetime.fromisoformat(
+        payload["last_evaluation"]["wait_until"].replace("Z", "+00:00")
+    )
+
+
+def test_result_does_not_fail_when_wait_result_has_no_wait_period(
+    client,
+    auth_headers,
+    db_session,
+):
+    session_payload = create_session(client, auth_headers, "exam-wait-no-period")
+    session = db_session.get(ExamSession, session_payload["id"])
+    assert session is not None
+    session.status = "completed"
+    session.completed_at = datetime.utcnow()
+    db_session.add(
+        ScoringResult(
+            session_id=session.id,
+            score=55.0,
+            decision="ESPERA",
+            weakest_metric="stroop_error_rate",
+            recommendation_key="high_stroop_error_rate",
+            computed_at=datetime.utcnow(),
+        )
+    )
+    db_session.commit()
+
+    response = client.get(
+        f"/sessions/{session_payload['id']}/result",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["decision"] == "ESPERA"
+    assert result["new_access_token"]
+    payload = decode_access_token(result["new_access_token"])
+    assert payload["last_evaluation"]["session_id"] == session_payload["id"]
+    assert payload["last_evaluation"]["decision"] == "ESPERA"
+    assert payload["last_evaluation"]["wait_until"] is None
 
 
 def test_session_access_control(client, auth_headers, other_headers):

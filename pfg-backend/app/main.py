@@ -7,8 +7,7 @@ Arranca con:
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
-from sqlalchemy.orm import Session
-
+from fastapi.middleware.cors import CORSMiddleware
 from app.database.session import engine, SessionLocal
 from app.database.init_db import init_db
 from app.models.user import User
@@ -16,28 +15,53 @@ from app.auth.password import get_password_hash
 from app.routers import auth, dashboard, sessions
 
 
-def create_test_user():
-    """Crea un usuario de prueba si no existe."""
+DEMO_USERS = [
+    {
+        "username": "alexis.samas.contreras@alumnos.upm.es",
+        "email": "alexis.samas.contreras@alumnos.upm.es",
+        "password": "secret",
+        "role": "student",
+    },
+    {
+        "username": "mario.vega@upm.es",
+        "email": "mario.vega@upm.es",
+        "password": "secret",
+        "role": "instructor",
+    },
+]
+
+
+def create_demo_users():
+    """Crea usuarios de demo si no existen."""
     db = SessionLocal()
     try:
-        # Verificar si el usuario de prueba ya existe
-        test_user = db.query(User).filter(User.username == "testuser").first()
-        if not test_user:
-            hashed_password = get_password_hash("secret")
-            test_user = User(
-                username="testuser",
-                email="testuser@example.com",
-                hashed_password=hashed_password,
-                role="student"
+        for demo_user in DEMO_USERS:
+            existing_user = (
+                db.query(User)
+                .filter(User.username == demo_user["username"])
+                .first()
             )
-            db.add(test_user)
+
+            if existing_user:
+                print(f"[OK] Usuario demo ya existe: {demo_user['username']}")
+                continue
+
+            user = User(
+                username=demo_user["username"],
+                email=demo_user["email"],
+                hashed_password=get_password_hash(demo_user["password"]),
+                role=demo_user["role"],
+            )
+            db.add(user)
             db.commit()
-            print("[OK] Usuario de prueba creado: testuser/secret")
-        else:
-            print("[OK] Usuario de prueba ya existe")
+            print(
+                "[OK] Usuario demo creado: "
+                f"{demo_user['username']}/{demo_user['password']} "
+                f"({demo_user['role']})"
+            )
     except Exception as e:
         db.rollback()
-        print(f"[WARN] Error al crear usuario de prueba: {e}")
+        print(f"[WARN] Error al crear usuarios demo: {e}")
     finally:
         db.close()
 
@@ -46,8 +70,8 @@ def create_test_user():
 async def lifespan(app: FastAPI):
     # Crear tablas en la base de datos al arrancar
     init_db()
-    # Crear usuario de prueba
-    create_test_user()
+    # Crear usuarios de demo
+    create_demo_users()
     yield
 
 
@@ -56,6 +80,17 @@ app = FastAPI(
     description="API para evaluación de atención mediante juegos cognitivos.",
     version="0.1.0",
     lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Registrar routers

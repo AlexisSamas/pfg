@@ -35,6 +35,7 @@ class ScoringResultResponse(BaseModel):
     weakest_metric: Optional[str] = None
     recommendation_key: Optional[str] = None
     computed_at: datetime
+    new_access_token: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 

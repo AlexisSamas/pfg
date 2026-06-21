@@ -1,0 +1,139 @@
+.start-evaluation {
+  text-align: center;
+}
+
+.games-notice {
+  margin: 24px auto 0;
+  max-width: 56ch;
+  border: 1px solid var(--warning-border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: var(--warning-bg);
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.start-error {
+  margin: 24px auto 0;
+  max-width: 58ch;
+  text-align: left;
+}
+
+.start-error p + p {
+  margin-top: 8px;
+}
+
+.stroop-accessibility {
+  max-width: 720px;
+  margin: 0 auto 24px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 18px 20px;
+  color: var(--text);
+  text-align: left;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.stroop-accessibility legend {
+  padding: 0 8px;
+  color: var(--text-strong);
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.stroop-accessibility p {
+  margin: 8px 0 0;
+}
+
+.radio-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.radio-group label,
+.color-range-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-strong);
+  font-weight: 700;
+}
+
+.radio-group input {
+  min-width: 18px;
+  min-height: 18px;
+}
+
+.color-range-field {
+  margin-top: 16px;
+}
+
+.color-range-field select {
+  min-height: 40px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: var(--text-strong);
+  background: var(--surface-muted);
+}
+
+.primary-action {
+  min-height: 44px;
+  margin-top: 28px;
+  border: 0;
+  border-radius: 6px;
+  padding: 12px 18px;
+  color: #ffffff;
+  font-weight: 700;
+  background: var(--accent);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+}
+
+.primary-action:hover:not(:disabled) {
+  background: var(--accent-strong);
+}
+
+.primary-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.secondary-action {
+  display: block;
+  min-height: 42px;
+  margin: 14px auto 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 16px;
+  color: var(--text-strong);
+  font-weight: 700;
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.secondary-action:hover {
+  border-color: var(--accent-strong);
+  color: var(--accent-strong);
+  background: var(--surface-muted);
+}
+
+.game-progress {
+  position: fixed;
+  top: 88px;
+  left: 50%;
+  z-index: 1;
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-strong);
+  font-size: 14px;
+  font-weight: 700;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  transform: translateX(-50%);
+}

@@ -1,0 +1,123 @@
+.result-page {
+  text-align: center;
+}
+
+.result-summary {
+  margin: 30px auto 0;
+  max-width: 560px;
+  border: 1px solid var(--border);
+  border-left: 6px solid var(--accent);
+  border-radius: 8px;
+  padding: 22px;
+  text-align: left;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.result-summary--acceso {
+  border-left-color: var(--success);
+  background: linear-gradient(90deg, rgba(240, 253, 244, 0.75), #ffffff 54%);
+}
+
+.result-summary--espera {
+  border-left-color: var(--warning);
+  background: linear-gradient(90deg, rgba(255, 251, 235, 0.84), #ffffff 54%);
+}
+
+.result-summary--bloqueo {
+  border-left-color: var(--danger);
+  background: linear-gradient(90deg, rgba(254, 242, 242, 0.84), #ffffff 54%);
+}
+
+.result-decision {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 25px;
+  font-weight: 800;
+}
+
+.result-message {
+  margin: 10px 0 0;
+  color: var(--text);
+  line-height: 1.6;
+}
+
+.result-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin: 30px auto 0;
+  max-width: 560px;
+  text-align: left;
+}
+
+.result-details div {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  background: var(--surface-muted);
+}
+
+.result-details dt {
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.result-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-strong);
+  font-weight: 700;
+}
+
+.technical-key {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.result-wait {
+  margin-top: 32px;
+}
+
+.result-wait h2 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 24px;
+}
+
+.result-wait-message {
+  margin: 28px auto 0;
+  max-width: 560px;
+}
+
+.result-retry-button {
+  min-height: 44px;
+  margin-top: 28px;
+  border: 0;
+  border-radius: 6px;
+  padding: 12px 18px;
+  color: #ffffff;
+  font-weight: 700;
+  background: var(--accent);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+}
+
+.result-retry-button:hover {
+  background: var(--accent-strong);
+}
+
+.result-retry-button:focus-visible {
+  outline: 0;
+}
+
+@media (max-width: 640px) {
+  .result-details {
+    grid-template-columns: 1fr;
+  }
+}

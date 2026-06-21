@@ -76,10 +76,14 @@ Variables principales:
 
 El backend conserva una inicializacion automatica con SQLAlchemy para desarrollo rapido y compatibilidad con tests. Para PostgreSQL y Docker, la forma recomendada de crear o actualizar el esquema es usar Alembic.
 
-Al arrancar, el backend crea un usuario de prueba si no existe:
+Al arrancar, el backend crea usuarios de demo si no existen:
 
-- usuario: `testuser`
-- password: `secret`
+- Alumno:
+  - usuario: `alexis.samas.contreras@alumnos.upm.es`
+  - password: `secret`
+- Docente:
+  - usuario: `mario.vega@upm.es`
+  - password: `secret`
 
 ## Ejecucion Con Docker Compose
 
@@ -148,6 +152,33 @@ http://127.0.0.1:8000/docs
 ```
 
 Desde Swagger puedes autenticarte en `/auth/token`, copiar el token Bearer y usar `Authorize` para probar endpoints protegidos.
+
+## JWT Y Ultima Evaluacion
+
+El JWT de acceso incluye un claim privado `last_evaluation` con un resumen no sensible de la ultima evaluacion del usuario. La base de datos sigue siendo la fuente de verdad; el claim solo permite que el frontend muestre el ultimo estado inmediatamente tras el login.
+
+Estructura del claim:
+
+```json
+{
+  "session_id": 123,
+  "context_id": "exam_test_01",
+  "score": 57.5,
+  "decision": "ESPERA",
+  "weakest_metric": "d_prime",
+  "recommendation_key": "low_dprime",
+  "computed_at": "2026-06-02T10:30:00",
+  "wait_until": "2026-06-02T10:40:00",
+  "requires_manual_grant": false,
+  "manual_grant": false
+}
+```
+
+Si no hay evaluaciones previas, `last_evaluation` se emite como `null`. No se incluyen contrasenas, hashes, email, eventos completos ni metricas detalladas.
+
+El claim se actualiza al iniciar sesion y tambien tras consultar `GET /sessions/{id}/result`, que devuelve `new_access_token` con el resumen recien calculado.
+
+Cuando la ultima decision es `ESPERA`, el claim conserva `wait_until` aunque el periodo ya haya vencido. Esto permite al frontend distinguir entre cuenta atras activa y espera finalizada. Si una evaluacion historica estuviera incompleta y no existiera `WaitPeriod`, el token se emite de forma defensiva sin romper login ni `/sessions/{id}/result`.
 
 ## Endpoints Principales
 
@@ -241,9 +272,16 @@ Estructura principal:
 
 Los tests de integracion usan SQLite en memoria y no modifican la base PostgreSQL local.
 
+Con Docker:
+
+```powershell
+docker compose run --rm backend python -m pytest tests/ -v
+```
+
 ## Flujo Basico De Uso
 
-1. Hacer login en `POST /auth/token` con `testuser` / `secret`.
+1. Hacer login en `POST /auth/token` con `alexis.samas.contreras@alumnos.upm.es` / `secret` para el flujo alumno.
+   Para el flujo docente, usar `mario.vega@upm.es` / `secret`.
 2. Crear una sesion con `POST /sessions` enviando `context_id`.
 3. Enviar eventos con `POST /sessions/{id}/events`.
 4. Obtener resultado con `GET /sessions/{id}/result`.
@@ -258,4 +296,4 @@ Los tests de integracion usan SQLite en memoria y no modifican la base PostgreSQ
 - `MAX_ATTEMPTS` limita el numero de sesiones que un usuario puede crear para el mismo `context_id`.
 - Si se alcanza `MAX_ATTEMPTS`, `POST /sessions` devuelve `403 Forbidden` e indica que se requiere concesion manual docente.
 - `POST /dashboard/grant-manual` concede acceso directamente mediante `access_decisions`; no reinicia el contador de intentos.
-- El frontend no forma parte de este backend en esta fase.
+- El frontend se mantiene en la carpeta hermana `pfg-frontend` y consume estos endpoints mediante `VITE_API_BASE_URL`.

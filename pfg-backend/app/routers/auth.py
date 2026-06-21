@@ -10,10 +10,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.auth.password import verify_password
-from app.auth.jwt_service import create_access_token
 from app.database.session import get_db
 from app.models.user import User
 from app.schemas.user import Token
+from app.services.last_evaluation import create_user_access_token
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -61,6 +61,6 @@ def login(
         )
 
     # Generar token
-    access_token = create_access_token(data={"sub": str(user.id)})
+    access_token = create_user_access_token(db=db, user=user)
 
     return Token(access_token=access_token, token_type="bearer")

@@ -1,0 +1,77 @@
+.practice-game {
+  width: min(760px, 100%);
+  margin: 0 auto;
+  text-align: center;
+}
+
+.practice-panel {
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  padding: 32px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: var(--shadow-md);
+}
+
+.practice-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 24px auto;
+  max-width: 540px;
+}
+
+.practice-summary span,
+.practice-controls span {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 9px 12px;
+  color: var(--text-strong);
+  font-weight: 700;
+  background: var(--surface-muted);
+}
+
+.practice-stimulus {
+  display: grid;
+  min-height: 220px;
+  margin: 24px auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  place-items: center;
+  background: var(--surface);
+  color: var(--text-strong);
+  font-size: clamp(56px, 11vw, 96px);
+  font-weight: 800;
+}
+
+.practice-flanker {
+  display: inline-flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.practice-flanker .central-arrow {
+  color: var(--accent);
+}
+
+.practice-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin: 20px auto 0;
+}
+
+.practice-feedback {
+  margin: 18px auto 0;
+  max-width: 48ch;
+}
+
+@media (max-width: 640px) {
+  .practice-panel {
+    padding: 26px 18px;
+  }
+
+  .practice-summary {
+    grid-template-columns: 1fr;
+  }
+}

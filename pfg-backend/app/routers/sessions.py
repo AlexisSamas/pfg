@@ -22,6 +22,7 @@ from app.services.scoring import (
     calculate_and_store_scoring_result,
     get_or_create_access_decision,
 )
+from app.services.last_evaluation import create_user_access_token
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -134,7 +135,15 @@ def get_session_result(
         )
 
     try:
-        return calculate_and_store_scoring_result(db=db, session=session)
+        scoring_result = calculate_and_store_scoring_result(db=db, session=session)
+        return ScoringResultResponse.model_validate(scoring_result).model_copy(
+            update={
+                "new_access_token": create_user_access_token(
+                    db=db,
+                    user=current_user,
+                )
+            }
+        )
     except ScoringException as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
