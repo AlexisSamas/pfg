@@ -1,5 +1,6 @@
 export { CPTGame } from './CPTGame'
 export { FlankerGame } from './FlankerGame'
 export { GameInstructions } from './GameInstructions'
-export { PracticeGame, PRACTICE_TRIAL_LIMIT } from './PracticeGame'
+export { PracticeGame } from './PracticeGame'
+export { PRACTICE_TRIAL_LIMIT } from './practiceTrials'
 export { StroopGame } from './StroopGame'

@@ -32,45 +32,19 @@
 .letter-display {
   display: grid;
   place-items: center;
-  width: min(320px, 100%);
-  aspect-ratio: 1;
+  width: 100%;
+  height: 220px;
+  min-height: 0;
+  aspect-ratio: auto;
   margin: 0 auto;
   border: 1px solid var(--border);
   border-radius: 8px;
   color: var(--text-strong);
-  background: #ffffff;
+  background: var(--surface);
   box-shadow: inset 0 0 0 6px var(--surface-muted), var(--shadow-sm);
-  font-size: 96px;
+  font-size: clamp(56px, 11vw, 96px);
   font-weight: 800;
   line-height: 1;
-}
-
-.cpt-event-counts {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-  margin: 0 auto 24px;
-  max-width: 680px;
-}
-
-.cpt-event-counts div {
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface-muted);
-}
-
-.cpt-event-counts dt {
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.cpt-event-counts dd {
-  margin: 4px 0 0;
-  color: var(--text-strong);
-  font-size: 24px;
-  font-weight: 800;
 }
 
 @media (max-width: 640px) {
@@ -79,10 +53,6 @@
   }
 
   .letter-display {
-    font-size: 72px;
-  }
-
-  .cpt-event-counts {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    height: 180px;
   }
 }

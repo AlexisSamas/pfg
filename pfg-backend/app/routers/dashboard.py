@@ -48,6 +48,11 @@ def create_manual_grant(
 
     return ManualGrantResponse(
         granted=True,
+        manual_grant=(
+            access_decision.decision == "ACCESO"
+            and access_decision.consumed_by == "manual_grant"
+            and access_decision.consumed_at is not None
+        ),
         user_id=access_decision.user_id,
         context_id=access_decision.context_id,
         decision=access_decision.decision,

@@ -44,13 +44,12 @@ def _scoring_time(scoring_result: ScoringResult, session: ExamSession):
     return scoring_result.computed_at or session.completed_at or session.started_at
 
 
-def _has_manual_grant_after_block(
+def _latest_manual_grant(
     db: Session,
     user_id: int,
     context_id: str,
-    block_time,
-) -> bool:
-    manual_grant = (
+) -> AccessDecision | None:
+    return (
         db.query(AccessDecision)
         .filter(
             and_(
@@ -67,6 +66,31 @@ def _has_manual_grant_after_block(
         )
         .first()
     )
+
+
+def has_valid_manual_grant(
+    db: Session,
+    user_id: int,
+    context_id: str,
+) -> bool:
+    return _latest_manual_grant(
+        db=db,
+        user_id=user_id,
+        context_id=context_id,
+    ) is not None
+
+
+def _has_manual_grant_after_block(
+    db: Session,
+    user_id: int,
+    context_id: str,
+    block_time,
+) -> bool:
+    manual_grant = _latest_manual_grant(
+        db=db,
+        user_id=user_id,
+        context_id=context_id,
+    )
     if manual_grant is None:
         return False
 
@@ -74,7 +98,7 @@ def _has_manual_grant_after_block(
     if block_time is None or manual_time is None:
         return True
 
-    return manual_time > block_time
+    return manual_time >= block_time
 
 
 def has_active_block(
@@ -119,38 +143,45 @@ def create_exam_session(
     user_id: int,
     context_id: str,
 ) -> ExamSession:
-    cached_wait = cooldown_cache.get_active_cooldown(
+    manual_grant = has_valid_manual_grant(
+        db=db,
         user_id=user_id,
         context_id=context_id,
     )
-    if cached_wait is not None:
-        raise WaitPeriodException(
-            "Usuario en espera temporal. Intente mas tarde.",
-            detail={
-                "message": "Active cooldown",
-                "wait_until": cached_wait.wait_until.isoformat(),
-                "recommendation_key": cached_wait.recommendation_key,
-                "reason": cached_wait.reason,
-            },
-        )
 
-    active_wait = db.query(WaitPeriod).filter(
-        and_(
-            WaitPeriod.user_id == user_id,
-            WaitPeriod.context_id == context_id,
-            WaitPeriod.wait_until > datetime.utcnow(),
+    if not manual_grant:
+        cached_wait = cooldown_cache.get_active_cooldown(
+            user_id=user_id,
+            context_id=context_id,
         )
-    ).first()
+        if cached_wait is not None:
+            raise WaitPeriodException(
+                "Usuario en espera temporal. Intente mas tarde.",
+                detail={
+                    "message": "Active cooldown",
+                    "wait_until": cached_wait.wait_until.isoformat(),
+                    "recommendation_key": cached_wait.recommendation_key,
+                    "reason": cached_wait.reason,
+                },
+            )
 
-    if active_wait:
-        cooldown_cache.set_cooldown_from_wait_period(active_wait)
-        raise WaitPeriodException(
-            f"Usuario en espera hasta {active_wait.wait_until}. "
-            "Intente mas tarde."
-        )
+        active_wait = db.query(WaitPeriod).filter(
+            and_(
+                WaitPeriod.user_id == user_id,
+                WaitPeriod.context_id == context_id,
+                WaitPeriod.wait_until > datetime.utcnow(),
+            )
+        ).first()
 
-    if has_active_block(db=db, user_id=user_id, context_id=context_id):
-        raise BlockedContextException(context_id=context_id)
+        if active_wait:
+            cooldown_cache.set_cooldown_from_wait_period(active_wait)
+            raise WaitPeriodException(
+                f"Usuario en espera hasta {active_wait.wait_until}. "
+                "Intente mas tarde."
+            )
+
+        if has_active_block(db=db, user_id=user_id, context_id=context_id):
+            raise BlockedContextException(context_id=context_id)
 
     previous_sessions = db.query(ExamSession).filter(
         and_(
@@ -160,7 +191,7 @@ def create_exam_session(
     ).count()
 
     max_attempts = getattr(settings, "MAX_ATTEMPTS", 3)
-    if previous_sessions >= max_attempts:
+    if not manual_grant and previous_sessions >= max_attempts:
         raise MaxAttemptsExceededException(
             max_attempts=max_attempts,
             context_id=context_id,

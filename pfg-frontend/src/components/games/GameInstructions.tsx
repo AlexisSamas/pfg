@@ -4,6 +4,7 @@ type GameInstructionsProps = {
   title: string
   description: string
   controls: string[]
+  compact?: boolean
   onStart: () => void
 }
 
@@ -11,10 +12,15 @@ export function GameInstructions({
   title,
   description,
   controls,
+  compact = false,
   onStart,
 }: GameInstructionsProps) {
+  const className = compact
+    ? 'game-instructions game-instructions--compact'
+    : 'game-instructions'
+
   return (
-    <section className="game-instructions" aria-labelledby="game-title">
+    <section className={className} aria-labelledby="game-title">
       <div>
         <p className="eyebrow">Instrucciones</p>
         <h1 id="game-title">{title}</h1>
@@ -31,7 +37,7 @@ export function GameInstructions({
       </div>
 
       <button type="button" className="primary-action" onClick={onStart}>
-        Comenzar
+        Comenzar práctica
       </button>
     </section>
   )

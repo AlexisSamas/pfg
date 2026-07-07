@@ -102,38 +102,63 @@
   opacity: 0.7;
 }
 
-.secondary-action {
-  display: block;
-  min-height: 42px;
-  margin: 14px auto 0;
+.test-exit-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.46);
+}
+
+.test-exit-panel {
+  width: min(460px, 100%);
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  padding: 28px;
+  color: var(--text);
+  text-align: center;
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+}
+
+.test-exit-panel h2 {
+  margin: 0 0 12px;
+  color: var(--text-strong);
+  font-size: 24px;
+}
+
+.test-exit-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 24px;
+}
+
+.test-exit-actions .primary-action {
+  margin-top: 0;
+}
+
+.secondary-test-action {
+  min-height: 44px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 10px 16px;
+  padding: 12px 18px;
   color: var(--text-strong);
-  font-weight: 700;
-  background: var(--surface);
-  cursor: pointer;
-}
-
-.secondary-action:hover {
-  border-color: var(--accent-strong);
-  color: var(--accent-strong);
-  background: var(--surface-muted);
-}
-
-.game-progress {
-  position: fixed;
-  top: 88px;
-  left: 50%;
-  z-index: 1;
-  margin: 0;
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  color: var(--text-strong);
-  font-size: 14px;
   font-weight: 700;
   background: var(--surface);
   box-shadow: var(--shadow-sm);
-  transform: translateX(-50%);
+  cursor: pointer;
+}
+
+@media (max-width: 640px) {
+  .test-exit-actions {
+    flex-direction: column-reverse;
+  }
+
+  .test-exit-actions button {
+    width: 100%;
+  }
 }

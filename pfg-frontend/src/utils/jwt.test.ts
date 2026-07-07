@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   decodeJwtPayload,
+  getAttemptContextFromToken,
   getLastEvaluationFromToken,
   getUserRoleFromToken,
 } from './jwt'
@@ -68,6 +69,22 @@ describe('jwt utilities', () => {
     expect(
       getUserRoleFromToken(createUnsignedToken({ role: 'instructor' })),
     ).toBe('instructor')
+  })
+
+  it('getAttemptContextFromToken devuelve intentos del contexto actual', () => {
+    const token = createUnsignedToken({
+      attempts_by_context: [
+        { context_id: 'exam_a', attempt_count: 3, max_attempts: 3 },
+        { context_id: 'exam_b', attempt_count: 1, max_attempts: 3 },
+      ],
+    })
+
+    expect(getAttemptContextFromToken(token, 'exam_a')).toEqual({
+      context_id: 'exam_a',
+      attempt_count: 3,
+      max_attempts: 3,
+    })
+    expect(getAttemptContextFromToken(token, 'exam_c')).toBeNull()
   })
 
   it('getUserRoleFromToken devuelve null con rol desconocido', () => {

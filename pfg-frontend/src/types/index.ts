@@ -16,6 +16,19 @@ export type LastEvaluationClaim = {
   manual_grant: boolean
 }
 
+export type AttemptContextClaim = {
+  context_id: string
+  attempt_count: number
+  max_attempts: number
+}
+
+export type StudentStatusResponse = {
+  context_id: string
+  attempt_count: number
+  max_attempts: number
+  last_evaluation: LastEvaluationClaim | null
+}
+
 export type LoginRequest = {
   username: string
   password: string
@@ -131,6 +144,7 @@ export type ManualGrantRequest = {
 
 export type ManualGrantResponse = {
   granted: boolean
+  manual_grant: boolean
   user_id: number
   context_id: string
   decision: Decision

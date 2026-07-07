@@ -1,20 +1,18 @@
 import { useEffect, useState } from 'react'
 import axios from 'axios'
 import { useNavigate } from 'react-router-dom'
-import { createSession, getResult, sendEvents } from '../api'
+import { createSession, sendEvents } from '../api'
 import { parseApiError, type ApiErrorInfo } from '../api/errorHandling'
 import {
   CPTGame,
   FlankerGame,
-  FlowProgress,
   GameInstructions,
   PracticeGame,
   StroopGame,
-  type FlowStep,
 } from '../components'
 import { getGameDurationMs } from '../config/evaluation'
 import { useAuth, useEvaluation, type CurrentGame } from '../context'
-import type { GameEvent } from '../types'
+import { getLastEvaluationFromToken } from '../utils/jwt'
 import { formatCountdown, parseBackendDateMs } from '../utils/time'
 import {
   getAvailableStroopColors,
@@ -24,14 +22,15 @@ import {
 } from '../components/games/stroopColors'
 import './StartEvaluationPage.css'
 
-type GamePhase = 'instructions' | 'practice' | 'running' | 'completed'
+type GamePhase =
+  | 'accessibility'
+  | 'instructions'
+  | 'practice'
+  | 'practice-completed'
+  | 'running'
+  | 'completed'
 const GAME_DURATION_MS = getGameDurationMs()
-
-const GAME_PROGRESS: Record<Exclude<CurrentGame, 'completed' | null>, string> = {
-  cpt: 'Juego 1 de 3: CPT',
-  stroop: 'Juego 2 de 3: Stroop',
-  flanker: 'Juego 3 de 3: Flanker',
-}
+const EVALUATION_FLOW_STORAGE_KEY = 'pfg_evaluation_flow'
 
 const STROOP_EXCLUDABLE_OPTIONS: Array<{
   value: ExcludableStroopColor
@@ -42,36 +41,112 @@ const STROOP_EXCLUDABLE_OPTIONS: Array<{
   { value: 'green', label: 'Gama verde' },
 ]
 
+function pushEvaluationHistory(
+  currentGame: Exclude<CurrentGame, 'completed' | null>,
+  gamePhase: GamePhase,
+) {
+  window.history.pushState(
+    { pfgEvaluationFlow: true, currentGame, gamePhase },
+    '',
+    window.location.href,
+  )
+}
+
+type StoredEvaluationFlow = {
+  currentGame: CurrentGame
+  gamePhase: GamePhase
+  stroopColorBlindMode: ColorBlindMode
+}
+
+function readStoredEvaluationFlow(): StoredEvaluationFlow | null {
+  const rawFlow = window.sessionStorage.getItem(EVALUATION_FLOW_STORAGE_KEY)
+
+  if (!rawFlow) {
+    return null
+  }
+
+  try {
+    return JSON.parse(rawFlow) as StoredEvaluationFlow
+  } catch {
+    window.sessionStorage.removeItem(EVALUATION_FLOW_STORAGE_KEY)
+    return null
+  }
+}
+
+function getInitialGamePhase(currentGame: CurrentGame): GamePhase {
+  const storedFlow = readStoredEvaluationFlow()
+
+  if (storedFlow?.currentGame === currentGame) {
+    return storedFlow.gamePhase
+  }
+
+  return currentGame === 'completed' ? 'completed' : 'instructions'
+}
+
+function getInitialStroopColorBlindMode(): ColorBlindMode {
+  return (
+    readStoredEvaluationFlow()?.stroopColorBlindMode ?? {
+      enabled: false,
+      excludedColor: 'blue',
+    }
+  )
+}
+
+function isBlockedForContext(
+  token: string | null,
+  contextId: string,
+): boolean {
+  const lastEvaluation = getLastEvaluationFromToken(token)
+
+  return Boolean(
+    lastEvaluation?.context_id === contextId &&
+      lastEvaluation.decision === 'BLOQUEO' &&
+      !lastEvaluation.manual_grant,
+  )
+}
+
 export function StartEvaluationPage() {
   const {
     contextId,
     sessionId,
     accumulatedEvents,
     currentGame,
+    clearEvaluation,
     startEvaluation,
     setCurrentGame,
-    setResult,
   } = useEvaluation()
-  const { login: updateToken, logout } = useAuth()
+  const { logout, token } = useAuth()
   const navigate = useNavigate()
-  const [gamePhase, setGamePhase] = useState<GamePhase>('instructions')
+  const [gamePhase, setGamePhase] = useState<GamePhase>(() =>
+    getInitialGamePhase(currentGame),
+  )
   const [isLoading, setIsLoading] = useState(false)
   const [errorInfo, setErrorInfo] = useState<ApiErrorInfo | null>(null)
-  const [canUseLocalCpt, setCanUseLocalCpt] = useState(false)
-  const [completedCptEvents, setCompletedCptEvents] = useState<GameEvent[]>([])
-  const [completedStroopEvents, setCompletedStroopEvents] = useState<GameEvent[]>([])
   const [eventsSent, setEventsSent] = useState(false)
   const [isSendingEvents, setIsSendingEvents] = useState(false)
   const [sendError, setSendError] = useState<string | null>(null)
   const [receivedEvents, setReceivedEvents] = useState<number | null>(null)
-  const [resultRequested, setResultRequested] = useState(false)
-  const [isFetchingResult, setIsFetchingResult] = useState(false)
-  const [resultError, setResultError] = useState<string | null>(null)
+  const [exitWarningOpen, setExitWarningOpen] = useState(false)
   const [stroopColorBlindMode, setStroopColorBlindMode] =
-    useState<ColorBlindMode>({
-      enabled: false,
-      excludedColor: 'blue',
-    })
+    useState<ColorBlindMode>(getInitialStroopColorBlindMode)
+
+  useEffect(() => {
+    if (!sessionId || !currentGame) {
+      window.sessionStorage.removeItem(EVALUATION_FLOW_STORAGE_KEY)
+      return
+    }
+
+    const flowToStore: StoredEvaluationFlow = {
+      currentGame,
+      gamePhase,
+      stroopColorBlindMode,
+    }
+
+    window.sessionStorage.setItem(
+      EVALUATION_FLOW_STORAGE_KEY,
+      JSON.stringify(flowToStore),
+    )
+  }, [currentGame, gamePhase, sessionId, stroopColorBlindMode])
 
   useEffect(() => {
     if (
@@ -86,7 +161,7 @@ export function StartEvaluationPage() {
     let isActive = true
     const activeSessionId = sessionId
 
-    async function submitEvents() {
+    async function submitEventsAndFetchResult() {
       setIsSendingEvents(true)
       setSendError(null)
 
@@ -101,6 +176,8 @@ export function StartEvaluationPage() {
 
         setReceivedEvents(response.received)
         setEventsSent(true)
+        setIsSendingEvents(false)
+        navigate('/result', { replace: true })
       } catch (requestError) {
         if (!isActive) {
           return
@@ -114,74 +191,113 @@ export function StartEvaluationPage() {
       }
     }
 
-    void submitEvents()
-
-    return () => {
-      isActive = false
-    }
-  }, [accumulatedEvents, currentGame, eventsSent, sessionId])
-
-  useEffect(() => {
-    if (!eventsSent || !sessionId || resultRequested) {
-      return
-    }
-
-    let isActive = true
-    const activeSessionId = sessionId
-
-    async function fetchFinalResult() {
-      setResultRequested(true)
-      setIsFetchingResult(true)
-      setResultError(null)
-
-      try {
-        const result = await getResult(activeSessionId)
-
-        if (!isActive) {
-          return
-        }
-
-        if (result.new_access_token) {
-          updateToken(result.new_access_token)
-        }
-
-        setResult(result)
-        navigate('/result', { replace: true })
-      } catch (requestError) {
-        if (!isActive) {
-          return
-        }
-
-        setResultError(parseApiError(requestError).message)
-      } finally {
-        if (isActive) {
-          setIsFetchingResult(false)
-        }
-      }
-    }
-
-    void fetchFinalResult()
+    void submitEventsAndFetchResult()
 
     return () => {
       isActive = false
     }
   }, [
+    accumulatedEvents,
+    currentGame,
     eventsSent,
     navigate,
-    resultRequested,
     sessionId,
-    setResult,
-    updateToken,
   ])
+
+  useEffect(() => {
+    function handleBrowserBack() {
+      if (currentGame === null || currentGame === 'completed') {
+        return
+      }
+
+      if (gamePhase === 'running') {
+        window.history.pushState(
+          { pfgEvaluationFlow: true, currentGame, gamePhase },
+          '',
+          window.location.href,
+        )
+        setExitWarningOpen(true)
+        return
+      }
+
+      if (
+        gamePhase === 'completed' &&
+        (currentGame === 'cpt' || currentGame === 'stroop')
+      ) {
+        window.history.pushState(
+          { pfgEvaluationFlow: true, currentGame, gamePhase },
+          '',
+          window.location.href,
+        )
+        setExitWarningOpen(true)
+        return
+      }
+
+      if (gamePhase === 'practice' || gamePhase === 'practice-completed') {
+        setGamePhase('instructions')
+        return
+      }
+
+      if (gamePhase === 'accessibility') {
+        setCurrentGame('cpt')
+        setGamePhase('completed')
+        return
+      }
+
+      if (gamePhase === 'instructions') {
+        if (currentGame === 'cpt') {
+          if (sessionId) {
+            window.history.pushState(
+              { pfgEvaluationFlow: true, currentGame, gamePhase },
+              '',
+              window.location.href,
+            )
+            setExitWarningOpen(true)
+            return
+          }
+
+          setCurrentGame(null)
+          setGamePhase('instructions')
+          return
+        }
+
+        if (currentGame === 'stroop') {
+          setGamePhase('accessibility')
+          return
+        }
+
+        setCurrentGame('stroop')
+        setGamePhase('completed')
+      }
+    }
+
+    window.addEventListener('popstate', handleBrowserBack)
+
+    return () => {
+      window.removeEventListener('popstate', handleBrowserBack)
+    }
+  }, [currentGame, gamePhase, sessionId, setCurrentGame])
 
   async function handleStartEvaluation() {
     if (isLoading) {
       return
     }
 
+    if (isBlockedForContext(token, contextId)) {
+      setErrorInfo({
+        message:
+          'El sistema ha bloqueado nuevos intentos para este contexto tras un resultado de bloqueo. Debes contactar con el docente.',
+        requiresManualGrant: true,
+        status: 403,
+      })
+      return
+    }
+
     if (sessionId || currentGame) {
       setErrorInfo(null)
-      setCanUseLocalCpt(false)
+      if (!currentGame) {
+        pushEvaluationHistory('cpt', 'instructions')
+      }
       setCurrentGame(currentGame ?? 'cpt')
       setGamePhase('instructions')
       return
@@ -189,12 +305,9 @@ export function StartEvaluationPage() {
 
     setIsLoading(true)
     setErrorInfo(null)
-    setCanUseLocalCpt(false)
     setEventsSent(false)
     setReceivedEvents(null)
     setSendError(null)
-    setResultRequested(false)
-    setResultError(null)
 
     try {
       const session = await createSession({ context_id: contextId })
@@ -204,6 +317,7 @@ export function StartEvaluationPage() {
         sessionId: session.id,
         attemptNumber: session.attempt_number,
       })
+      pushEvaluationHistory('cpt', 'instructions')
       setGamePhase('instructions')
     } catch (requestError) {
       if (
@@ -215,7 +329,6 @@ export function StartEvaluationPage() {
       } else {
         const parsedError = parseApiError(requestError)
         setErrorInfo(parsedError)
-        setCanUseLocalCpt(parsedError.status === 403)
       }
     } finally {
       setIsLoading(false)
@@ -223,24 +336,64 @@ export function StartEvaluationPage() {
   }
 
   function goToGame(game: Exclude<CurrentGame, 'completed' | null>) {
+    const nextPhase = game === 'stroop' ? 'accessibility' : 'instructions'
+
+    pushEvaluationHistory(game, nextPhase)
     setCurrentGame(game)
+    setGamePhase(nextPhase)
+  }
+
+  function goToStroopInstructions() {
+    pushEvaluationHistory('stroop', 'instructions')
     setGamePhase('instructions')
+  }
+
+  function goToPractice() {
+    if (currentGame && currentGame !== 'completed') {
+      pushEvaluationHistory(currentGame, 'practice')
+    }
+    setGamePhase('practice')
+  }
+
+  function goToRunning() {
+    if (currentGame && currentGame !== 'completed') {
+      pushEvaluationHistory(currentGame, 'running')
+    }
+    setGamePhase('running')
+  }
+
+  function handlePracticeComplete() {
+    setGamePhase('practice-completed')
+  }
+
+  function handleStayInTest() {
+    setExitWarningOpen(false)
+  }
+
+  function handleExitTest() {
+    setExitWarningOpen(false)
+    window.sessionStorage.removeItem(EVALUATION_FLOW_STORAGE_KEY)
+    clearEvaluation()
+    navigate('/', { replace: true, state: { refreshStudentStatus: true } })
   }
 
   if (currentGame === 'cpt' && gamePhase === 'instructions') {
     return (
       <>
-        <FlowProgress currentStep="cpt" />
-        <ProgressLabel game="cpt" />
         <GameInstructions
+          compact
           title="CPT: atención sostenida"
           description="Verás letras una a una. Mantén la atención y responde únicamente cuando aparezca la letra objetivo."
           controls={[
             'Barra espaciadora: responder cuando la letra sea X.',
             'No pulses ninguna tecla si aparece otra letra.',
-            'Si dudas, espera al siguiente estímulo.',
           ]}
-          onStart={() => setGamePhase('practice')}
+          onStart={goToPractice}
+        />
+        <ExitTestDialog
+          isOpen={exitWarningOpen}
+          onCancel={handleStayInTest}
+          onConfirm={handleExitTest}
         />
       </>
     )
@@ -249,9 +402,29 @@ export function StartEvaluationPage() {
   if (currentGame === 'cpt' && gamePhase === 'practice') {
     return (
       <>
-        <FlowProgress currentStep="cpt" />
-        <ProgressLabel game="cpt" />
-        <PracticeGame game="cpt" onComplete={() => setGamePhase('running')} />
+        <PracticeGame
+          game="cpt"
+          onComplete={goToRunning}
+          onPracticeComplete={handlePracticeComplete}
+        />
+        <ExitTestDialog
+          isOpen={exitWarningOpen}
+          onCancel={handleStayInTest}
+          onConfirm={handleExitTest}
+        />
+      </>
+    )
+  }
+
+  if (currentGame === 'cpt' && gamePhase === 'practice-completed') {
+    return (
+      <>
+        <PracticeCompletedPanel gameName="CPT" onStartReal={goToRunning} />
+        <ExitTestDialog
+          isOpen={exitWarningOpen}
+          onCancel={handleStayInTest}
+          onConfirm={handleExitTest}
+        />
       </>
     )
   }
@@ -259,15 +432,15 @@ export function StartEvaluationPage() {
   if (currentGame === 'cpt' && gamePhase === 'running') {
     return (
       <>
-        <FlowProgress currentStep="cpt" />
-        <ProgressLabel game="cpt" />
         <CPTGame
           durationMs={GAME_DURATION_MS}
           intervalMs={1_000}
-          onComplete={(events) => {
-            setCompletedCptEvents(events)
-            setGamePhase('completed')
-          }}
+          onComplete={() => setGamePhase('completed')}
+        />
+        <ExitTestDialog
+          isOpen={exitWarningOpen}
+          onCancel={handleStayInTest}
+          onConfirm={handleExitTest}
         />
       </>
     )
@@ -275,37 +448,63 @@ export function StartEvaluationPage() {
 
   if (currentGame === 'cpt' && gamePhase === 'completed') {
     return (
-      <CompletedGamePanel
-        gameName="CPT"
-        eventCount={completedCptEvents.length}
-        flowStep="cpt"
-        nextLabel="Continuar a Stroop"
-        onNext={() => goToGame('stroop')}
-      />
+      <>
+        <CompletedGamePanel
+          gameName="CPT"
+          nextLabel="Continuar a Stroop"
+          onNext={() => goToGame('stroop')}
+        />
+        <ExitTestDialog
+          confirmLabel="Salir de la evaluación"
+          isOpen={exitWarningOpen}
+          message="Hay una evaluación en curso. Si sales ahora, perderás el progreso actual."
+          onCancel={handleStayInTest}
+          onConfirm={handleExitTest}
+          title="Evaluación en curso"
+        />
+      </>
+    )
+  }
+
+  if (currentGame === 'stroop' && gamePhase === 'accessibility') {
+    return (
+      <>
+        <StroopAccessibilitySettings
+          mode={stroopColorBlindMode}
+          onChange={setStroopColorBlindMode}
+          onConfirm={goToStroopInstructions}
+        />
+        <ExitTestDialog
+          isOpen={exitWarningOpen}
+          onCancel={handleStayInTest}
+          onConfirm={handleExitTest}
+        />
+      </>
     )
   }
 
   if (currentGame === 'stroop' && gamePhase === 'instructions') {
     const availableStroopColors = getAvailableStroopColors(stroopColorBlindMode)
+    const stroopControlLine = availableStroopColors
+      .map((color) => STROOP_COLORS[color].controlLabel.replace(' = ', ': '))
+      .join(', ')
 
     return (
       <>
-        <FlowProgress currentStep="stroop" />
-        <ProgressLabel game="stroop" />
-        <StroopAccessibilitySettings
-          mode={stroopColorBlindMode}
-          onChange={setStroopColorBlindMode}
-        />
         <GameInstructions
+          compact
           title="Stroop: color e inhibición"
           description="Verás palabras de colores. Responde al color de la tinta y evita dejarte guiar por el significado de la palabra."
           controls={[
-            ...availableStroopColors.map(
-              (color) => `${STROOP_COLORS[color].controlLabel}.`,
-            ),
+            stroopControlLine,
             'Responde solo cuando tengas claro el color de la tinta.',
           ]}
-          onStart={() => setGamePhase('practice')}
+          onStart={goToPractice}
+        />
+        <ExitTestDialog
+          isOpen={exitWarningOpen}
+          onCancel={handleStayInTest}
+          onConfirm={handleExitTest}
         />
       </>
     )
@@ -314,12 +513,29 @@ export function StartEvaluationPage() {
   if (currentGame === 'stroop' && gamePhase === 'practice') {
     return (
       <>
-        <FlowProgress currentStep="stroop" />
-        <ProgressLabel game="stroop" />
         <PracticeGame
           colorBlindMode={stroopColorBlindMode}
           game="stroop"
-          onComplete={() => setGamePhase('running')}
+          onComplete={goToRunning}
+          onPracticeComplete={handlePracticeComplete}
+        />
+        <ExitTestDialog
+          isOpen={exitWarningOpen}
+          onCancel={handleStayInTest}
+          onConfirm={handleExitTest}
+        />
+      </>
+    )
+  }
+
+  if (currentGame === 'stroop' && gamePhase === 'practice-completed') {
+    return (
+      <>
+        <PracticeCompletedPanel gameName="Stroop" onStartReal={goToRunning} />
+        <ExitTestDialog
+          isOpen={exitWarningOpen}
+          onCancel={handleStayInTest}
+          onConfirm={handleExitTest}
         />
       </>
     )
@@ -328,16 +544,16 @@ export function StartEvaluationPage() {
   if (currentGame === 'stroop' && gamePhase === 'running') {
     return (
       <>
-        <FlowProgress currentStep="stroop" />
-        <ProgressLabel game="stroop" />
         <StroopGame
           colorBlindMode={stroopColorBlindMode}
           durationMs={GAME_DURATION_MS}
-          trialMs={1_500}
-          onComplete={(events) => {
-            setCompletedStroopEvents(events)
-            setGamePhase('completed')
-          }}
+          trialMs={1_000}
+          onComplete={() => setGamePhase('completed')}
+        />
+        <ExitTestDialog
+          isOpen={exitWarningOpen}
+          onCancel={handleStayInTest}
+          onConfirm={handleExitTest}
         />
       </>
     )
@@ -345,31 +561,41 @@ export function StartEvaluationPage() {
 
   if (currentGame === 'stroop' && gamePhase === 'completed') {
     return (
-      <CompletedGamePanel
-        gameName="Stroop"
-        eventCount={completedStroopEvents.length}
-        flowStep="stroop"
-        nextLabel="Continuar a Flanker"
-        onNext={() => goToGame('flanker')}
-      />
+      <>
+        <CompletedGamePanel
+          gameName="Stroop"
+          nextLabel="Continuar a Flanker"
+          onNext={() => goToGame('flanker')}
+        />
+        <ExitTestDialog
+          confirmLabel="Salir de la evaluación"
+          isOpen={exitWarningOpen}
+          message="Hay una evaluación en curso. Si sales ahora, perderás el progreso actual."
+          onCancel={handleStayInTest}
+          onConfirm={handleExitTest}
+          title="Evaluación en curso"
+        />
+      </>
     )
   }
 
   if (currentGame === 'flanker' && gamePhase === 'instructions') {
     return (
       <>
-        <FlowProgress currentStep="flanker" />
-        <ProgressLabel game="flanker" />
         <GameInstructions
+          compact
           title="Flanker: flecha central"
-          description="Verás una fila de cinco flechas. Responde únicamente a la dirección de la flecha central, aunque las laterales distraigan."
+          description="Verás una fila de siete símbolos. Responde únicamente a la dirección del símbolo central, aunque los laterales distraigan."
           controls={[
-            'ArrowLeft = izquierda.',
-            'ArrowRight = derecha.',
-            'Ignora las flechas laterales.',
-            'Prioriza responder a la flecha central.',
+            'ArrowLeft = izquierda, ArrowRight = derecha.',
+            'Ignora las flechas laterales y prioriza responder a la flecha central.',
           ]}
-          onStart={() => setGamePhase('practice')}
+          onStart={goToPractice}
+        />
+        <ExitTestDialog
+          isOpen={exitWarningOpen}
+          onCancel={handleStayInTest}
+          onConfirm={handleExitTest}
         />
       </>
     )
@@ -378,9 +604,29 @@ export function StartEvaluationPage() {
   if (currentGame === 'flanker' && gamePhase === 'practice') {
     return (
       <>
-        <FlowProgress currentStep="flanker" />
-        <ProgressLabel game="flanker" />
-        <PracticeGame game="flanker" onComplete={() => setGamePhase('running')} />
+        <PracticeGame
+          game="flanker"
+          onComplete={goToRunning}
+          onPracticeComplete={handlePracticeComplete}
+        />
+        <ExitTestDialog
+          isOpen={exitWarningOpen}
+          onCancel={handleStayInTest}
+          onConfirm={handleExitTest}
+        />
+      </>
+    )
+  }
+
+  if (currentGame === 'flanker' && gamePhase === 'practice-completed') {
+    return (
+      <>
+        <PracticeCompletedPanel gameName="Flanker" onStartReal={goToRunning} />
+        <ExitTestDialog
+          isOpen={exitWarningOpen}
+          onCancel={handleStayInTest}
+          onConfirm={handleExitTest}
+        />
       </>
     )
   }
@@ -388,15 +634,18 @@ export function StartEvaluationPage() {
   if (currentGame === 'flanker' && gamePhase === 'running') {
     return (
       <>
-        <FlowProgress currentStep="flanker" />
-        <ProgressLabel game="flanker" />
         <FlankerGame
           durationMs={GAME_DURATION_MS}
-          trialMs={1_500}
+          trialMs={1_000}
           onComplete={() => {
             setCurrentGame('completed')
             setGamePhase('completed')
           }}
+        />
+        <ExitTestDialog
+          isOpen={exitWarningOpen}
+          onCancel={handleStayInTest}
+          onConfirm={handleExitTest}
         />
       </>
     )
@@ -408,7 +657,6 @@ export function StartEvaluationPage() {
         className="page-panel start-evaluation"
         aria-labelledby="evaluation-completed-title"
       >
-        <FlowProgress currentStep="result" />
         <p className="eyebrow">Evaluación</p>
         <h1 id="evaluation-completed-title">Evaluación completada</h1>
         <p className="description">
@@ -418,15 +666,14 @@ export function StartEvaluationPage() {
 
         {sessionId ? (
           <EventSendStatus
-            isFetchingResult={isFetchingResult}
+            hasEvents={accumulatedEvents.length > 0}
             isSendingEvents={isSendingEvents}
             receivedEvents={receivedEvents}
-            resultError={resultError}
             sendError={sendError}
           />
         ) : (
           <p className="page-status">
-            Modo local: no se han enviado eventos porque no hay sesión backend.
+            No se han enviado eventos porque no hay una sesión activa.
           </p>
         )}
       </section>
@@ -435,7 +682,6 @@ export function StartEvaluationPage() {
 
   return (
     <section className="page-panel start-evaluation" aria-labelledby="start-title">
-      <FlowProgress currentStep="session" />
       <p className="eyebrow">Evaluación</p>
       <h1 id="start-title">Iniciar evaluación cognitiva</h1>
       <p className="description">
@@ -456,46 +702,29 @@ export function StartEvaluationPage() {
         onClick={handleStartEvaluation}
         disabled={isLoading}
       >
-        {isLoading ? 'Creando sesión en el backend...' : 'Iniciar evaluación'}
+        {isLoading ? 'Creando sesión...' : 'Realizar intento'}
       </button>
 
-      {canUseLocalCpt && (
-        <button
-          type="button"
-          className="secondary-action"
-          disabled={isLoading}
-          onClick={() => {
-            setErrorInfo(null)
-            setCanUseLocalCpt(false)
-            setCurrentGame('cpt')
-            setGamePhase('instructions')
-          }}
-        >
-          Probar secuencia sin crear sesión
-        </button>
-      )}
     </section>
   )
-}
-
-function ProgressLabel({
-  game,
-}: {
-  game: Exclude<CurrentGame, 'completed' | null>
-}) {
-  return <p className="game-progress">{GAME_PROGRESS[game]}</p>
 }
 
 function StroopAccessibilitySettings({
   mode,
   onChange,
+  onConfirm,
 }: {
   mode: ColorBlindMode
   onChange: (mode: ColorBlindMode) => void
+  onConfirm: () => void
 }) {
   return (
+    <section
+      className="page-panel start-evaluation"
+      aria-labelledby="stroop-accessibility-title"
+    >
     <fieldset className="stroop-accessibility">
-      <legend>Accesibilidad visual</legend>
+      <legend id="stroop-accessibility-title">Accesibilidad visual</legend>
       <p>
         Si tienes dificultad para distinguir alguna gama de colores, puedes
         activar el modo daltónico para excluir esa gama durante el juego Stroop.
@@ -556,6 +785,10 @@ function StroopAccessibilitySettings({
         </label>
       )}
     </fieldset>
+      <button type="button" className="primary-action" onClick={onConfirm}>
+        Confirmar
+      </button>
+    </section>
   )
 }
 
@@ -597,24 +830,19 @@ function ApiErrorMessage({ errorInfo }: { errorInfo: ApiErrorInfo }) {
 
 function CompletedGamePanel({
   gameName,
-  eventCount,
-  flowStep,
   nextLabel,
   onNext,
 }: {
   gameName: string
-  eventCount: number
-  flowStep: FlowStep
   nextLabel: string
   onNext: () => void
 }) {
   return (
     <section className="page-panel start-evaluation" aria-labelledby="done-title">
-      <FlowProgress currentStep={flowStep} />
       <p className="eyebrow">{gameName}</p>
       <h1 id="done-title">{gameName} finalizado</h1>
       <p className="description">
-        Se han guardado {eventCount} eventos {gameName} en la evaluación actual.
+        Se han guardado los eventos en la evaluación actual.
       </p>
       <button type="button" className="primary-action" onClick={onNext}>
         {nextLabel}
@@ -623,23 +851,100 @@ function CompletedGamePanel({
   )
 }
 
+function PracticeCompletedPanel({
+  gameName,
+  onStartReal,
+}: {
+  gameName: string
+  onStartReal: () => void
+}) {
+  return (
+    <section className="practice-game" aria-labelledby="practice-complete-title">
+      <div className="practice-panel">
+        <p className="eyebrow">Práctica {gameName}</p>
+        <h1 id="practice-complete-title">Práctica {gameName} completada</h1>
+        <p className="description">
+          Has terminado los 10 ensayos de práctica. Esta fase no se ha incluido
+          en la puntuación ni se enviará al sistema.
+        </p>
+        <button type="button" className="primary-action" onClick={onStartReal}>
+          Comenzar evaluación real
+        </button>
+      </div>
+    </section>
+  )
+}
+
+function ExitTestDialog({
+  confirmLabel = 'Salir de la prueba',
+  isOpen,
+  message = 'Hay una prueba en curso. Si sales ahora, perderás el progreso actual.',
+  onCancel,
+  onConfirm,
+  title = 'Prueba en curso',
+}: {
+  confirmLabel?: string
+  isOpen: boolean
+  message?: string
+  onCancel: () => void
+  onConfirm: () => void
+  title?: string
+}) {
+  if (!isOpen) {
+    return null
+  }
+
+  return (
+    <div
+      aria-labelledby="exit-test-title"
+      aria-modal="true"
+      className="test-exit-backdrop"
+      role="dialog"
+    >
+      <div className="test-exit-panel">
+        <h2 id="exit-test-title">{title}</h2>
+        <p>{message}</p>
+        <div className="test-exit-actions">
+          <button
+            type="button"
+            className="secondary-test-action"
+            onClick={onCancel}
+          >
+            Permanecer
+          </button>
+          <button type="button" className="primary-action" onClick={onConfirm}>
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function EventSendStatus({
-  isFetchingResult,
+  hasEvents,
   isSendingEvents,
   receivedEvents,
-  resultError,
   sendError,
 }: {
-  isFetchingResult: boolean
+  hasEvents: boolean
   isSendingEvents: boolean
   receivedEvents: number | null
-  resultError: string | null
   sendError: string | null
 }) {
+  if (!hasEvents) {
+    return (
+      <p className="form-message error-message" role="alert">
+        No hay eventos registrados para enviar. Vuelve al inicio e inicia una
+        evaluación nueva.
+      </p>
+    )
+  }
+
   if (isSendingEvents) {
     return (
       <p className="page-status" aria-live="polite">
-        Enviando eventos al backend. Mantén esta pantalla abierta...
+        Enviando datos... Mantén esta pantalla abierta.
       </p>
     )
   }
@@ -653,35 +958,18 @@ function EventSendStatus({
     )
   }
 
-  if (isFetchingResult) {
-    return (
-      <p className="page-status" aria-live="polite">
-        Eventos recibidos. Obteniendo resultado final del backend...
-      </p>
-    )
-  }
-
-  if (resultError) {
-    return (
-      <p className="form-message error-message" role="alert">
-        {resultError} Los eventos ya se habían enviado, pero no se pudo cargar
-        la pantalla de resultado.
-      </p>
-    )
-  }
-
   if (receivedEvents !== null) {
     return (
       <p className="form-message success-message" role="status">
-        Eventos enviados correctamente. El backend confirmó {receivedEvents}{' '}
-        eventos recibidos.
+        Eventos enviados correctamente. Se confirmaron {receivedEvents} eventos
+        recibidos.
       </p>
     )
   }
 
   return (
     <p className="page-status" aria-live="polite">
-      Preparando envío de eventos al backend...
+      Preparando envío de datos...
     </p>
   )
 }

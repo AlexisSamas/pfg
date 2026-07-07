@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 from pydantic import BaseModel, EmailStr, ConfigDict, Field
 
 
@@ -22,3 +23,10 @@ class UserResponse(UserBase):
 class Token(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+
+class StudentStatus(BaseModel):
+    context_id: str
+    attempt_count: int
+    max_attempts: int
+    last_evaluation: dict[str, Any] | None = None

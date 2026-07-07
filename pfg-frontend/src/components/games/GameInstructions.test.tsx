@@ -28,6 +28,11 @@ describe('GameInstructions', () => {
     expect(
       screen.getByText(/no pulses si aparece otra letra/i),
     ).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /comenzar/i })).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: /comenzar práctica/i }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: /^comenzar$/i }),
+    ).not.toBeInTheDocument()
   })
 })

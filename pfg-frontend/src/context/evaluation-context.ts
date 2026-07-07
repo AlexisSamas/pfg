@@ -1,7 +1,7 @@
 import { createContext } from 'react'
 import type { GameEvent, GameType, ScoringResult, WaitResponse } from '../types'
 
-export const DEFAULT_CONTEXT_ID = 'exam_demo_01'
+export const DEFAULT_CONTEXT_ID = 'exam_test_11'
 
 export type CurrentGame = GameType | 'completed' | null
 

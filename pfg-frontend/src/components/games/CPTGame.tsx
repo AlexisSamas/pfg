@@ -2,9 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import { useEvaluation } from '../../context'
 import type { GameEvent } from '../../types'
 import './CPTGame.css'
-
-const TARGET_LETTER = 'X'
-const NON_TARGET_LETTERS = 'ABCDEFGHJKLMNPQRSTUVWYZ'.split('')
+import {
+  createInitialCptGenerationState,
+  getNextCptLetter,
+  TARGET_LETTER,
+  type CptGenerationState,
+} from './stimulusGenerators'
 
 type CPTGameProps = {
   durationMs?: number
@@ -35,23 +38,6 @@ type CPTEvent = GameEvent & {
   stimulus_type: 'target' | 'non_target'
 }
 
-const INITIAL_EVENT_COUNTS: CPTEventCounts = {
-  hit: 0,
-  miss: 0,
-  false_alarm: 0,
-  correct_rejection: 0,
-}
-
-function getRandomLetter(targetProbability: number): string {
-  if (Math.random() < targetProbability) {
-    return TARGET_LETTER
-  }
-
-  const index = Math.floor(Math.random() * NON_TARGET_LETTERS.length)
-
-  return NON_TARGET_LETTERS[index]
-}
-
 function toTimestampUs(timestampMs: number): number {
   return Math.round(timestampMs * 1000)
 }
@@ -66,9 +52,6 @@ export function CPTGame({
   const [currentLetter, setCurrentLetter] = useState<string | null>(null)
   const [timeRemainingMs, setTimeRemainingMs] = useState(durationMs)
   const [isFinished, setIsFinished] = useState(false)
-  const [eventCount, setEventCount] = useState(0)
-  const [eventCounts, setEventCounts] =
-    useState<CPTEventCounts>(INITIAL_EVENT_COUNTS)
 
   const eventsRef = useRef<GameEvent[]>([])
   const stimulusRef = useRef<CurrentStimulus | null>(null)
@@ -76,6 +59,8 @@ export function CPTGame({
   const countdownRef = useRef<number | null>(null)
   const startedAtRef = useRef(0)
   const finishedRef = useRef(false)
+  const stimulusIndexRef = useRef(0)
+  const generationStateRef = useRef<CptGenerationState | null>(null)
   const onCompleteRef = useRef(onComplete)
 
   useEffect(() => {
@@ -86,14 +71,11 @@ export function CPTGame({
     startedAtRef.current = performance.now()
     eventsRef.current = []
     finishedRef.current = false
+    stimulusIndexRef.current = 0
+    generationStateRef.current = createInitialCptGenerationState()
 
     function recordEvent(event: CPTEvent) {
       eventsRef.current = [...eventsRef.current, event]
-      setEventCount(eventsRef.current.length)
-      setEventCounts((currentCounts) => ({
-        ...currentCounts,
-        [event.event_type]: currentCounts[event.event_type] + 1,
-      }))
       addEvents([event])
     }
 
@@ -133,12 +115,14 @@ export function CPTGame({
       }
     }
 
-    function scheduleNextStimulus() {
+    function scheduleNextStimulus(stimulusIndex = stimulusIndexRef.current) {
       if (finishedRef.current) {
         return
       }
 
-      const elapsedMs = performance.now() - startedAtRef.current
+      const startTime = startedAtRef.current
+      const now = performance.now()
+      const elapsedMs = now - startTime
       const remainingMs = durationMs - elapsedMs
 
       if (remainingMs <= 0) {
@@ -146,7 +130,11 @@ export function CPTGame({
         return
       }
 
-      const letter = getRandomLetter(targetProbability)
+      const generationState =
+        generationStateRef.current ?? createInitialCptGenerationState()
+      const nextLetter = getNextCptLetter(targetProbability, generationState)
+      const letter = nextLetter.letter
+      generationStateRef.current = nextLetter.state
       const startedAt = performance.now()
       const isTarget = letter === TARGET_LETTER
 
@@ -157,6 +145,12 @@ export function CPTGame({
         responded: false,
       }
       setCurrentLetter(letter)
+
+      const stimulusDeadlineMs = Math.min(
+        startTime + (stimulusIndex + 1) * intervalMs,
+        startTime + durationMs,
+      )
+      const timeoutDelayMs = Math.max(0, stimulusDeadlineMs - performance.now())
 
       timeoutRef.current = window.setTimeout(() => {
         const stimulus = stimulusRef.current
@@ -174,8 +168,15 @@ export function CPTGame({
         }
 
         stimulusRef.current = null
-        scheduleNextStimulus()
-      }, Math.min(intervalMs, remainingMs))
+        stimulusIndexRef.current = stimulusIndex + 1
+
+        if (stimulusDeadlineMs >= startedAtRef.current + durationMs) {
+          finishGame()
+          return
+        }
+
+        scheduleNextStimulus(stimulusIndex + 1)
+      }, timeoutDelayMs)
     }
 
     function handleKeyDown(event: KeyboardEvent) {
@@ -231,34 +232,11 @@ export function CPTGame({
       <div className="cpt-header">
         <p className="eyebrow">CPT</p>
         <h1 id="cpt-title">Tarea de atención sostenida</h1>
-        <p className="description">
-          Pulsa la barra espaciadora solo cuando aparezca la letra X.
-        </p>
       </div>
 
       <div className="cpt-status" aria-live="polite">
         <span>Tiempo restante: {Math.ceil(timeRemainingMs / 1000)} s</span>
-        <span>Eventos generados: {eventCount}</span>
       </div>
-
-      <dl className="cpt-event-counts" aria-label="Eventos CPT acumulados">
-        <div>
-          <dt>hit</dt>
-          <dd>{eventCounts.hit}</dd>
-        </div>
-        <div>
-          <dt>miss</dt>
-          <dd>{eventCounts.miss}</dd>
-        </div>
-        <div>
-          <dt>false_alarm</dt>
-          <dd>{eventCounts.false_alarm}</dd>
-        </div>
-        <div>
-          <dt>correct_rejection</dt>
-          <dd>{eventCounts.correct_rejection}</dd>
-        </div>
-      </dl>
 
       <div className="letter-display" aria-live="assertive">
         {isFinished ? 'Fin' : currentLetter}

@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   logout: vi.fn(),
   navigate: vi.fn(),
   sendEvents: vi.fn(),
+  token: null as string | null,
 }))
 
 vi.mock('react-router-dom', async (importOriginal) => {
@@ -31,9 +32,19 @@ vi.mock('../context', () => ({
   useAuth: () => ({
     login: vi.fn(),
     logout: mocks.logout,
+    token: mocks.token,
   }),
   useEvaluation: () => mocks.evaluationValue,
 }))
+
+function createToken(payload: object): string {
+  const encodedPayload = btoa(JSON.stringify(payload))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '')
+
+  return `header.${encodedPayload}.signature`
+}
 
 vi.mock('../components', () => ({
   CPTGame: () => <section>CPT real</section>,
@@ -43,7 +54,7 @@ vi.mock('../components', () => ({
   ),
   GameInstructions: ({ onStart }: { onStart: () => void }) => (
     <button type="button" onClick={onStart}>
-      Empezar práctica
+      Comenzar práctica
     </button>
   ),
   PracticeGame: ({ onComplete }: { onComplete: () => void }) => (
@@ -57,6 +68,7 @@ vi.mock('../components', () => ({
 function renderStartEvaluationPage() {
   mocks.evaluationValue = {
     accumulatedEvents: [],
+    clearEvaluation: vi.fn(),
     contextId: 'exam_demo_01',
     currentGame: null,
     sessionId: null,
@@ -75,6 +87,7 @@ function renderStartEvaluationPage() {
 describe('StartEvaluationPage errores backend', () => {
   beforeEach(() => {
     mocks.createSession.mockReset()
+    mocks.token = null
   })
 
   it('muestra cooldown 429 al crear sesión', async () => {
@@ -94,9 +107,67 @@ describe('StartEvaluationPage errores backend', () => {
 
     renderStartEvaluationPage()
 
-    fireEvent.click(screen.getByRole('button', { name: /Iniciar evaluación/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Realizar intento/i }))
 
     expect(await screen.findByText(/Debes esperar/i)).toBeInTheDocument()
     expect(screen.getByText(/2026-06-10T12:00:00/i)).toBeInTheDocument()
+  })
+
+  it('muestra mensaje específico cuando el backend bloquea el contexto', async () => {
+    mocks.createSession.mockRejectedValue({
+      isAxiosError: true,
+      response: {
+        status: 403,
+        data: {
+          detail: {
+            message: 'User is blocked for this context',
+            context_id: 'exam_demo_01',
+            requires_manual_grant: true,
+            reason: 'BLOCK decision',
+          },
+        },
+      },
+    })
+
+    renderStartEvaluationPage()
+
+    fireEvent.click(screen.getByRole('button', { name: /Realizar intento/i }))
+
+    expect(
+      await screen.findByText(/ha bloqueado nuevos intentos/i),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/comprueba la conexión/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/nueva evaluación/i)).not.toBeInTheDocument()
+  })
+
+  it('no crea sesión si el token ya indica BLOQUEO sin grant manual en el contexto actual', async () => {
+    mocks.token = createToken({
+      role: 'student',
+      last_evaluation: {
+        session_id: 99,
+        context_id: 'exam_demo_01',
+        score: 25,
+        decision: 'BLOQUEO',
+        weakest_metric: 'd_prime',
+        recommendation_key: 'low_dprime',
+        computed_at: '2026-06-10T10:00:00',
+        wait_until: null,
+        requires_manual_grant: true,
+        manual_grant: false,
+      },
+    })
+
+    renderStartEvaluationPage()
+
+    fireEvent.click(screen.getByRole('button', { name: /Realizar intento/i }))
+
+    expect(
+      await screen.findByText(/ha bloqueado nuevos intentos/i),
+    ).toBeInTheDocument()
+    expect(mocks.createSession).not.toHaveBeenCalled()
+    expect(
+      (mocks.evaluationValue as { startEvaluation: ReturnType<typeof vi.fn> })
+        .startEvaluation,
+    ).not.toHaveBeenCalled()
   })
 })

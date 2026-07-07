@@ -6,10 +6,11 @@
 }
 
 .app-header {
-  display: flex;
+  display: grid;
+  grid-template-columns: max-content minmax(520px, 800px) max-content;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 18px;
   padding: 14px 28px;
   border-bottom: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.94);
@@ -23,12 +24,37 @@
   text-decoration: none;
 }
 
+.app-header-progress {
+  justify-self: center;
+  width: min(800px, 100%);
+}
+
+.app-header-progress .flow-progress {
+  width: 100%;
+  margin: 0;
+}
+
+.app-header-progress .flow-progress__item {
+  min-height: 32px;
+  padding: 5px 9px;
+  font-size: 12px;
+}
+
+.app-header-progress .flow-progress__marker {
+  width: 19px;
+  height: 19px;
+  inline-size: 19px;
+  block-size: 19px;
+}
+
 .app-nav {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: flex-end;
-  gap: 10px;
+  justify-self: end;
+  gap: 8px;
+  white-space: nowrap;
 }
 
 .app-nav a {
@@ -83,10 +109,24 @@
   }
 }
 
+@media (max-width: 980px) {
+  .app-header {
+    grid-template-columns: 1fr;
+  }
+
+  .app-title,
+  .app-header-progress,
+  .app-nav {
+    justify-self: stretch;
+  }
+
+  .app-header-progress .flow-progress {
+    grid-template-columns: repeat(3, minmax(112px, 1fr));
+  }
+}
+
 @media (max-width: 640px) {
   .app-header {
-    align-items: flex-start;
-    flex-direction: column;
     padding: 16px 20px;
   }
 

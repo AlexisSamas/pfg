@@ -30,7 +30,7 @@ export const STROOP_COLORS: Record<
   },
   yellow: {
     label: 'AMARILLO',
-    cssColor: '#ca8a04',
+    cssColor: '#FFEA00',
     key: 'KeyY',
     controlLabel: 'Y = amarillo',
   },

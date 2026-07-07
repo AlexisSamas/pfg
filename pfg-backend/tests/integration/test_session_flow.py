@@ -16,10 +16,15 @@ from app.database.session import get_db
 from app.main import app
 from app.models import AccessDecision, ExamSession, ScoringResult, User, WaitPeriod
 from app.services.cooldown_cache import CooldownInfo
+from app.services.redis_client import get_redis_client
 
 
 @pytest.fixture
 def db_session():
+    redis_client = get_redis_client()
+    if redis_client is not None:
+        redis_client.flushdb()
+
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -424,6 +429,49 @@ def test_login_without_evaluation_has_null_last_evaluation(client):
     assert payload["last_evaluation"] is None
 
 
+def test_login_includes_attempts_by_context(client, auth_headers):
+    create_max_sessions(client, auth_headers, "exam-login-attempts")
+
+    payload = login_payload(client)
+
+    assert {
+        "context_id": "exam-login-attempts",
+        "attempt_count": settings.MAX_ATTEMPTS,
+        "max_attempts": settings.MAX_ATTEMPTS,
+    } in payload["attempts_by_context"]
+
+
+def test_refresh_token_includes_updated_attempts_by_context(client, auth_headers):
+    create_max_sessions(client, auth_headers, "exam-refresh-attempts")
+
+    response = client.get("/auth/refresh", headers=auth_headers)
+
+    assert response.status_code == 200
+    assert response.json()["token_type"] == "bearer"
+    payload = decode_access_token(response.json()["access_token"])
+    assert {
+        "context_id": "exam-refresh-attempts",
+        "attempt_count": settings.MAX_ATTEMPTS,
+        "max_attempts": settings.MAX_ATTEMPTS,
+    } in payload["attempts_by_context"]
+
+
+def test_student_status_counts_created_sessions_without_results(
+    client,
+    auth_headers,
+):
+    create_session(client, auth_headers, "exam-status-attempts")
+
+    response = client.get("/auth/status/exam-status-attempts", headers=auth_headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["context_id"] == "exam-status-attempts"
+    assert payload["attempt_count"] == 1
+    assert payload["max_attempts"] == settings.MAX_ATTEMPTS
+    assert payload["last_evaluation"] is None
+
+
 def test_login_with_previous_evaluation_includes_last_evaluation(
     client,
     db_session,
@@ -586,6 +634,38 @@ def test_login_after_manual_grant_reflects_access(client, db_session):
     assert payload["last_evaluation"]["decision"] == "ACCESO"
     assert payload["last_evaluation"]["manual_grant"] is True
     assert payload["last_evaluation"]["requires_manual_grant"] is False
+
+
+def test_login_after_max_attempts_manual_grant_reflects_access(
+    client,
+    auth_headers,
+    instructor_headers,
+):
+    create_max_sessions(client, auth_headers, "exam-login-max-manual")
+
+    grant_response = client.post(
+        "/dashboard/grant-manual",
+        json={
+            "user_id": 1,
+            "context_id": "exam-login-max-manual",
+            "reason": "Acceso concedido tras maximo de intentos",
+        },
+        headers=instructor_headers,
+    )
+    assert grant_response.status_code == 200
+    grant_payload = grant_response.json()
+    assert grant_payload["granted"] is True
+    assert grant_payload["manual_grant"] is True
+    assert grant_payload["context_id"] == "exam-login-max-manual"
+    assert grant_payload["decision"] == "ACCESO"
+
+    payload = login_payload(client)
+
+    assert payload["last_evaluation"]["context_id"] == "exam-login-max-manual"
+    assert payload["last_evaluation"]["decision"] == "ACCESO"
+    assert payload["last_evaluation"]["manual_grant"] is True
+    assert payload["last_evaluation"]["requires_manual_grant"] is False
+    assert payload["last_evaluation"]["wait_until"] is None
 
 
 def test_create_session_requires_token(client):
@@ -767,7 +847,7 @@ def test_result_does_not_fail_when_wait_result_has_no_wait_period(
     payload = decode_access_token(result["new_access_token"])
     assert payload["last_evaluation"]["session_id"] == session_payload["id"]
     assert payload["last_evaluation"]["decision"] == "ESPERA"
-    assert payload["last_evaluation"]["wait_until"] is None
+    assert payload["last_evaluation"]["wait_until"] is not None
 
 
 def test_session_access_control(client, auth_headers, other_headers):
@@ -958,8 +1038,16 @@ def test_manual_grant_without_session_returns_404(client, instructor_headers):
     assert response.status_code == 404
 
 
-def test_create_session_rejects_when_max_attempts_exceeded(client, auth_headers):
+def test_create_session_rejects_when_max_attempts_exceeded(
+    client,
+    auth_headers,
+    db_session,
+):
     create_max_sessions(client, auth_headers, "exam-max-attempts")
+    sessions_before_retry = db_session.query(ExamSession).filter(
+        ExamSession.user_id == 1,
+        ExamSession.context_id == "exam-max-attempts",
+    ).count()
 
     response = client.post(
         "/sessions",
@@ -973,6 +1061,11 @@ def test_create_session_rejects_when_max_attempts_exceeded(client, auth_headers)
     assert detail["max_attempts"] == settings.MAX_ATTEMPTS
     assert detail["context_id"] == "exam-max-attempts"
     assert detail["requires_manual_grant"] is True
+    sessions_after_retry = db_session.query(ExamSession).filter(
+        ExamSession.user_id == 1,
+        ExamSession.context_id == "exam-max-attempts",
+    ).count()
+    assert sessions_after_retry == sessions_before_retry
 
 
 def test_create_session_below_max_attempts_still_works(client, auth_headers):
@@ -980,9 +1073,16 @@ def test_create_session_below_max_attempts_still_works(client, auth_headers):
     for _ in range(max(1, settings.MAX_ATTEMPTS - 1)):
         sessions.append(create_session(client, auth_headers, "exam-below-max"))
 
+    final_allowed_session = create_session(
+        client,
+        auth_headers,
+        "exam-below-max",
+    )
+
     assert sessions[0]["attempt_number"] == 1
     assert sessions[-1]["attempt_number"] == len(sessions)
     assert sessions[-1]["attempt_number"] <= settings.MAX_ATTEMPTS
+    assert final_allowed_session["attempt_number"] == settings.MAX_ATTEMPTS
 
 
 def test_max_attempts_are_scoped_by_context_id(client, auth_headers):
@@ -996,6 +1096,86 @@ def test_max_attempts_are_scoped_by_context_id(client, auth_headers):
 
     assert response.status_code == 201
     assert response.json()["context_id"] == "context-b"
+    assert response.json()["attempt_number"] == 1
+
+
+def test_max_attempts_are_scoped_by_user_id(
+    client,
+    auth_headers,
+    other_headers,
+):
+    create_max_sessions(client, auth_headers, "context-shared")
+
+    response = client.post(
+        "/sessions",
+        json={"context_id": "context-shared"},
+        headers=other_headers,
+    )
+
+    assert response.status_code == 201
+    assert response.json()["context_id"] == "context-shared"
+    assert response.json()["attempt_number"] == 1
+
+
+def test_manual_grant_does_not_bypass_other_context_max_attempts(
+    client,
+    auth_headers,
+    instructor_headers,
+):
+    create_session(client, auth_headers, "exam-grant-scope-a")
+    create_max_sessions(client, auth_headers, "exam-grant-scope-b")
+
+    grant_response = client.post(
+        "/dashboard/grant-manual",
+        json={
+            "user_id": 1,
+            "context_id": "exam-grant-scope-a",
+            "reason": "Acceso manual para contexto A",
+        },
+        headers=instructor_headers,
+    )
+    assert grant_response.status_code == 200
+
+    granted_context_response = client.post(
+        "/sessions",
+        json={"context_id": "exam-grant-scope-a"},
+        headers=auth_headers,
+    )
+    assert granted_context_response.status_code == 201
+
+    other_context_response = client.post(
+        "/sessions",
+        json={"context_id": "exam-grant-scope-b"},
+        headers=auth_headers,
+    )
+    assert other_context_response.status_code == 403
+    assert other_context_response.json()["detail"]["message"] == (
+        "Maximum attempts exceeded"
+    )
+
+
+def test_access_result_does_not_mark_other_context_as_completed(
+    client,
+    auth_headers,
+    db_session,
+):
+    user = get_user(db_session)
+    add_scored_session(
+        db_session=db_session,
+        user=user,
+        context_id="exam-access-scope-a",
+        score=88.0,
+        decision="ACCESO",
+    )
+
+    response = client.post(
+        "/sessions",
+        json={"context_id": "exam-access-scope-b"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 201
+    assert response.json()["context_id"] == "exam-access-scope-b"
     assert response.json()["attempt_number"] == 1
 
 
@@ -1025,6 +1205,35 @@ def test_cooldown_has_priority_over_max_attempts(
 
     assert response.status_code == 429
     assert "espera" in response.json()["detail"]
+
+
+def test_wait_period_is_scoped_by_context_id(
+    client,
+    auth_headers,
+    db_session,
+):
+    session = create_session(client, auth_headers, "exam-wait-scope-a")
+    db_session.add(
+        WaitPeriod(
+            user_id=1,
+            context_id="exam-wait-scope-a",
+            attempt_number=session["attempt_number"],
+            wait_until=datetime.utcnow() + timedelta(minutes=10),
+            reason="decision_espera",
+            recommendation_key="low_dprime",
+        )
+    )
+    db_session.commit()
+
+    response = client.post(
+        "/sessions",
+        json={"context_id": "exam-wait-scope-b"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 201
+    assert response.json()["context_id"] == "exam-wait-scope-b"
+    assert response.json()["attempt_number"] == 1
 
 
 def test_create_session_uses_redis_cooldown_before_postgres(
@@ -1121,6 +1330,135 @@ def test_manual_grant_after_block_is_reflected_in_dashboard(
     assert payload[0]["latest_decision"] == "ACCESO"
     assert payload[0]["manual_grant"] is True
 
+    persisted_dashboard_response = client.get(
+        "/dashboard/context/exam-block-manual",
+        headers=instructor_headers,
+    )
+    assert persisted_dashboard_response.status_code == 200
+    persisted_payload = persisted_dashboard_response.json()
+    assert persisted_payload[0]["manual_grant"] is True
+    assert persisted_payload[0]["latest_decision"] == "ACCESO"
+
+
+def test_manual_grant_after_block_allows_new_session(
+    client,
+    auth_headers,
+    instructor_headers,
+):
+    create_blocked_result(client, auth_headers, "exam-block-grant-session")
+
+    blocked_response = client.post(
+        "/sessions",
+        json={"context_id": "exam-block-grant-session"},
+        headers=auth_headers,
+    )
+    assert blocked_response.status_code == 403
+    assert blocked_response.json()["detail"]["message"] == (
+        "User is blocked for this context"
+    )
+
+    grant_response = client.post(
+        "/dashboard/grant-manual",
+        json={
+            "user_id": 1,
+            "context_id": "exam-block-grant-session",
+            "reason": "Acceso concedido tras bloqueo severo",
+        },
+        headers=instructor_headers,
+    )
+    assert grant_response.status_code == 200
+    grant_payload = grant_response.json()
+    assert grant_payload["granted"] is True
+    assert grant_payload["manual_grant"] is True
+
+    response = client.post(
+        "/sessions",
+        json={"context_id": "exam-block-grant-session"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 201
+    assert response.json()["context_id"] == "exam-block-grant-session"
+
+    dashboard_response = client.get(
+        "/dashboard/context/exam-block-grant-session",
+        headers=instructor_headers,
+    )
+    assert dashboard_response.status_code == 200
+    dashboard_payload = dashboard_response.json()
+    assert dashboard_payload[0]["manual_grant"] is True
+    assert dashboard_payload[0]["latest_decision"] == "ACCESO"
+
+
+def test_manual_grant_after_block_persists_for_dashboard_and_student_retry(
+    client,
+    auth_headers,
+    instructor_headers,
+    db_session,
+):
+    context_id = "exam-block-grant-e2e"
+    create_blocked_result(client, auth_headers, context_id)
+
+    before_dashboard_response = client.get(
+        f"/dashboard/context/{context_id}",
+        headers=instructor_headers,
+    )
+    assert before_dashboard_response.status_code == 200
+    before_dashboard_payload = before_dashboard_response.json()
+    assert before_dashboard_payload[0]["latest_decision"] == "BLOQUEO"
+    assert before_dashboard_payload[0]["manual_grant"] is False
+
+    blocked_response = client.post(
+        "/sessions",
+        json={"context_id": context_id},
+        headers=auth_headers,
+    )
+    assert blocked_response.status_code == 403
+    assert blocked_response.json()["detail"]["requires_manual_grant"] is True
+
+    grant_payload = {
+        "user_id": 1,
+        "context_id": context_id,
+        "reason": "Acceso concedido tras bloqueo severo",
+    }
+    grant_response = client.post(
+        "/dashboard/grant-manual",
+        json=grant_payload,
+        headers=instructor_headers,
+    )
+    assert grant_response.status_code == 200
+    grant_response_payload = grant_response.json()
+    assert grant_response_payload["granted"] is True
+    assert grant_response_payload["manual_grant"] is True
+    assert grant_response_payload["user_id"] == grant_payload["user_id"]
+    assert grant_response_payload["context_id"] == grant_payload["context_id"]
+    assert grant_response_payload["decision"] == "ACCESO"
+
+    persisted_decision = db_session.query(AccessDecision).filter(
+        AccessDecision.user_id == grant_payload["user_id"],
+        AccessDecision.context_id == grant_payload["context_id"],
+        AccessDecision.decision == "ACCESO",
+        AccessDecision.consumed_by == "manual_grant",
+    ).one()
+    assert persisted_decision.consumed_at is not None
+
+    refreshed_dashboard_response = client.get(
+        f"/dashboard/context/{context_id}",
+        headers=instructor_headers,
+    )
+    assert refreshed_dashboard_response.status_code == 200
+    refreshed_dashboard_payload = refreshed_dashboard_response.json()
+    assert refreshed_dashboard_payload[0]["manual_grant"] is True
+    assert refreshed_dashboard_payload[0]["latest_decision"] == "ACCESO"
+
+    retry_response = client.post(
+        "/sessions",
+        json={"context_id": context_id},
+        headers=auth_headers,
+    )
+    assert retry_response.status_code == 201
+    assert retry_response.json()["context_id"] == context_id
+
 
 def test_dashboard_shows_block_without_manual_grant(
     client,
@@ -1139,6 +1477,101 @@ def test_dashboard_shows_block_without_manual_grant(
     assert len(payload) == 1
     assert payload[0]["latest_decision"] == "BLOQUEO"
     assert payload[0]["manual_grant"] is False
+
+
+def test_dashboard_uses_latest_scored_result_when_latest_session_is_incomplete(
+    client,
+    auth_headers,
+    instructor_headers,
+    db_session,
+):
+    blocked_session, blocked_result = create_blocked_result(
+        client,
+        auth_headers,
+        "exam-block-dashboard-incomplete",
+    )
+    db_session.add(
+        ExamSession(
+            user_id=1,
+            context_id="exam-block-dashboard-incomplete",
+            attempt_number=blocked_session["attempt_number"] + 1,
+            status="active",
+            started_at=datetime.utcnow() + timedelta(seconds=1),
+        )
+    )
+    db_session.commit()
+
+    dashboard_response = client.get(
+        "/dashboard/context/exam-block-dashboard-incomplete",
+        headers=instructor_headers,
+    )
+
+    assert dashboard_response.status_code == 200
+    payload = dashboard_response.json()
+    assert len(payload) == 1
+    assert payload[0]["latest_attempt_number"] == 2
+    assert payload[0]["latest_score"] == blocked_result["score"]
+    assert payload[0]["latest_decision"] == "BLOQUEO"
+    assert payload[0]["manual_grant"] is False
+
+
+def test_manual_grant_after_block_uses_scored_session_when_latest_is_incomplete(
+    client,
+    auth_headers,
+    instructor_headers,
+    db_session,
+):
+    blocked_session, _ = create_blocked_result(
+        client,
+        auth_headers,
+        "exam-block-grant-incomplete",
+    )
+    db_session.add(
+        ExamSession(
+            user_id=1,
+            context_id="exam-block-grant-incomplete",
+            attempt_number=blocked_session["attempt_number"] + 1,
+            status="active",
+            started_at=datetime.utcnow() + timedelta(seconds=1),
+        )
+    )
+    db_session.commit()
+
+    grant_response = client.post(
+        "/dashboard/grant-manual",
+        json={
+            "user_id": 1,
+            "context_id": "exam-block-grant-incomplete",
+            "reason": "Acceso concedido tras bloqueo severo",
+        },
+        headers=instructor_headers,
+    )
+
+    assert grant_response.status_code == 200
+    access_decision = db_session.query(AccessDecision).filter(
+        AccessDecision.user_id == 1,
+        AccessDecision.context_id == "exam-block-grant-incomplete",
+    ).one()
+    assert access_decision.session_id == blocked_session["id"]
+    assert access_decision.consumed_by == "manual_grant"
+
+
+def test_block_decision_does_not_block_other_user_same_context(
+    client,
+    auth_headers,
+    other_headers,
+):
+    create_blocked_result(client, auth_headers, "exam-block-user-scope")
+
+    response = client.post(
+        "/sessions",
+        json={"context_id": "exam-block-user-scope"},
+        headers=other_headers,
+    )
+
+    assert response.status_code == 201
+    assert response.json()["context_id"] == "exam-block-user-scope"
+    assert response.json()["attempt_number"] == 1
 
 
 def test_cooldown_has_priority_over_block_decision(
@@ -1192,6 +1625,12 @@ def test_manual_grant_after_max_attempts_is_reflected_in_dashboard(
     )
 
     assert grant_response.status_code == 200
+    grant_payload = grant_response.json()
+    assert grant_payload["granted"] is True
+    assert grant_payload["manual_grant"] is True
+    assert grant_payload["context_id"] == "exam-max-manual"
+    assert grant_payload["decision"] == "ACCESO"
+
     access_decision = db_session.query(AccessDecision).filter(
         AccessDecision.user_id == 1,
         AccessDecision.context_id == "exam-max-manual",
@@ -1210,3 +1649,97 @@ def test_manual_grant_after_max_attempts_is_reflected_in_dashboard(
     assert payload[0]["latest_attempt_number"] == settings.MAX_ATTEMPTS
     assert payload[0]["manual_grant"] is True
     assert payload[0]["latest_decision"] == "ACCESO"
+
+    persisted_dashboard_response = client.get(
+        "/dashboard/context/exam-max-manual",
+        headers=instructor_headers,
+    )
+    assert persisted_dashboard_response.status_code == 200
+    persisted_payload = persisted_dashboard_response.json()
+    assert persisted_payload[0]["manual_grant"] is True
+    assert persisted_payload[0]["latest_decision"] == "ACCESO"
+
+
+def test_manual_grant_after_max_attempts_allows_new_session(
+    client,
+    auth_headers,
+    instructor_headers,
+):
+    create_max_sessions(client, auth_headers, "exam-max-grant-session")
+
+    max_attempts_response = client.post(
+        "/sessions",
+        json={"context_id": "exam-max-grant-session"},
+        headers=auth_headers,
+    )
+    assert max_attempts_response.status_code == 403
+    assert max_attempts_response.json()["detail"]["message"] == (
+        "Maximum attempts exceeded"
+    )
+
+    grant_response = client.post(
+        "/dashboard/grant-manual",
+        json={
+            "user_id": 1,
+            "context_id": "exam-max-grant-session",
+            "reason": "Acceso concedido tras maximo de intentos",
+        },
+        headers=instructor_headers,
+    )
+    assert grant_response.status_code == 200
+
+    response = client.post(
+        "/sessions",
+        json={"context_id": "exam-max-grant-session"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["context_id"] == "exam-max-grant-session"
+    assert payload["attempt_number"] == settings.MAX_ATTEMPTS + 1
+
+    dashboard_response = client.get(
+        "/dashboard/context/exam-max-grant-session",
+        headers=instructor_headers,
+    )
+    assert dashboard_response.status_code == 200
+    dashboard_payload = dashboard_response.json()
+    assert dashboard_payload[0]["manual_grant"] is True
+    assert dashboard_payload[0]["latest_decision"] == "ACCESO"
+
+
+def test_dashboard_manual_grant_source_matches_sessions_logic(
+    client,
+    auth_headers,
+    instructor_headers,
+):
+    create_max_sessions(client, auth_headers, "exam-dashboard-source")
+
+    grant_response = client.post(
+        "/dashboard/grant-manual",
+        json={
+            "user_id": 1,
+            "context_id": "exam-dashboard-source",
+            "reason": "Acceso manual validado por dashboard",
+        },
+        headers=instructor_headers,
+    )
+    assert grant_response.status_code == 200
+
+    dashboard_response = client.get(
+        "/dashboard/context/exam-dashboard-source",
+        headers=instructor_headers,
+    )
+    assert dashboard_response.status_code == 200
+    dashboard_payload = dashboard_response.json()
+    assert dashboard_payload[0]["manual_grant"] is True
+
+    session_response = client.post(
+        "/sessions",
+        json={"context_id": "exam-dashboard-source"},
+        headers=auth_headers,
+    )
+
+    assert session_response.status_code == 201
+    assert session_response.json()["context_id"] == "exam-dashboard-source"

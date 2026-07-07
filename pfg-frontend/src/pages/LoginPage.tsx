@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react'
 import axios from 'axios'
 import { login as loginRequest } from '../api'
 import { FlowProgress } from '../components'
-import { useAuth } from '../context'
+import { useAuth, useEvaluation } from '../context'
 import type { LoginRequest } from '../types'
 import './LoginPage.css'
 
@@ -11,6 +11,7 @@ const MIN_PASSWORD_LENGTH = 6
 
 export function LoginPage() {
   const { login } = useAuth()
+  const { clearEvaluation } = useEvaluation()
   const [credentials, setCredentials] = useState<LoginRequest>({
     username: '',
     password: '',
@@ -43,6 +44,7 @@ export function LoginPage() {
         username,
         password: credentials.password,
       })
+      clearEvaluation()
       login(authToken.access_token)
       setHasLoggedIn(true)
     } catch (requestError) {
@@ -60,7 +62,7 @@ export function LoginPage() {
         setError('Credenciales incorrectas. Revisa el usuario y la contraseña.')
       } else {
         setError(
-          'No se pudo conectar con el servidor. Comprueba que el backend esté arrancado e inténtalo de nuevo.',
+          'No se pudo conectar con el servidor. Comprueba que el servicio esté disponible e inténtalo de nuevo.',
         )
       }
     } finally {

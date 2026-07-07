@@ -33,6 +33,7 @@ class ManualGrantRequest(BaseModel):
 
 class ManualGrantResponse(BaseModel):
     granted: bool
+    manual_grant: bool
     user_id: int
     context_id: str
     decision: DecisionType

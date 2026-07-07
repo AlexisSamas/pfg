@@ -1,143 +1,33 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './PracticeGame.css'
 import {
-  getAvailableStroopColors,
-  getDifferentStroopColor,
-  STROOP_COLORS,
+  GAME_LABELS,
+  generateCptPracticeTrials,
+  generateFlankerPracticeTrials,
+  generateStroopPracticeTrials,
+  getPracticeTrial,
+  PRACTICE_TRIAL_LIMIT,
+  type PracticeTrial,
   type ColorBlindMode,
-} from './stroopColors'
-
-export const PRACTICE_TRIAL_LIMIT = 10
-
-const FEEDBACK_DELAY_MS = 350
-
-type PracticeGameKind = 'cpt' | 'stroop' | 'flanker'
-type FeedbackKind = 'correct' | 'incorrect' | 'timeout'
+  type FeedbackKind,
+  type PracticeGameKind,
+} from './practiceTrials'
 
 type PracticeGameProps = {
   game: PracticeGameKind
   trialLimit?: number
   trialMs?: number
   colorBlindMode?: ColorBlindMode
+  onPracticeComplete?: () => void
   onComplete: () => void
 }
 
-type PracticeTrial = {
-  stimulus: string
-  expectedCode: string | null
-  timeoutFeedback: FeedbackKind
-  controls: string[]
-  validCodes: string[]
-  cssColor?: string
-  flankerParts?: string[]
-}
-
-const GAME_LABELS: Record<PracticeGameKind, string> = {
-  cpt: 'CPT',
-  stroop: 'Stroop',
-  flanker: 'Flanker',
-}
-
-const FLANKER_TRIALS: Array<PracticeTrial> = [
-  {
-    stimulus: '← ← ← ← ←',
-    expectedCode: 'ArrowLeft',
-    timeoutFeedback: 'timeout',
-    controls: ['ArrowLeft = izquierda', 'ArrowRight = derecha'],
-    validCodes: ['ArrowLeft', 'ArrowRight'],
-    flankerParts: ['←', '←', '←', '←', '←'],
-  },
-  {
-    stimulus: '→ → ← → →',
-    expectedCode: 'ArrowLeft',
-    timeoutFeedback: 'timeout',
-    controls: ['ArrowLeft = izquierda', 'ArrowRight = derecha'],
-    validCodes: ['ArrowLeft', 'ArrowRight'],
-    flankerParts: ['→', '→', '←', '→', '→'],
-  },
-  {
-    stimulus: '→ → → → →',
-    expectedCode: 'ArrowRight',
-    timeoutFeedback: 'timeout',
-    controls: ['ArrowLeft = izquierda', 'ArrowRight = derecha'],
-    validCodes: ['ArrowLeft', 'ArrowRight'],
-    flankerParts: ['→', '→', '→', '→', '→'],
-  },
-  {
-    stimulus: '← ← → ← ←',
-    expectedCode: 'ArrowRight',
-    timeoutFeedback: 'timeout',
-    controls: ['ArrowLeft = izquierda', 'ArrowRight = derecha'],
-    validCodes: ['ArrowLeft', 'ArrowRight'],
-    flankerParts: ['←', '←', '→', '←', '←'],
-  },
-]
-
-function getCptTrial(trialIndex: number): PracticeTrial {
-  const isTarget = trialIndex % 2 === 0
-  const nonTargetLetters = ['B', 'K', 'M', 'P', 'T']
-
-  return {
-    stimulus: isTarget
-      ? 'X'
-      : nonTargetLetters[trialIndex % nonTargetLetters.length],
-    expectedCode: isTarget ? 'Space' : null,
-    timeoutFeedback: isTarget ? 'timeout' : 'correct',
-    controls: [
-      'Barra espaciadora = responder si aparece X',
-      'No pulses si aparece otra letra',
-    ],
-    validCodes: ['Space'],
-  }
-}
-
-function getStroopTrial(
-  trialIndex: number,
-  colorBlindMode?: ColorBlindMode,
-): PracticeTrial {
-  const availableColors = getAvailableStroopColors(colorBlindMode)
-  const word = availableColors[trialIndex % availableColors.length]
-  const ink =
-    trialIndex % 2 === 0
-      ? word
-      : getDifferentStroopColor(word, availableColors)
-
-  return {
-    stimulus: STROOP_COLORS[word].label,
-    expectedCode: STROOP_COLORS[ink].key,
-    timeoutFeedback: 'timeout',
-    controls: availableColors.map((color) => STROOP_COLORS[color].controlLabel),
-    validCodes: availableColors.map((color) => STROOP_COLORS[color].key),
-    cssColor: STROOP_COLORS[ink].cssColor,
-  }
-}
-
-function getPracticeTrial(
-  game: PracticeGameKind,
-  trialIndex: number,
-  colorBlindMode?: ColorBlindMode,
-): PracticeTrial {
-  if (game === 'cpt') {
-    return getCptTrial(trialIndex)
+function getPracticeFeedbackText(feedback: FeedbackKind | null): string {
+  if (!feedback) {
+    return ''
   }
 
-  if (game === 'stroop') {
-    return getStroopTrial(trialIndex, colorBlindMode)
-  }
-
-  return FLANKER_TRIALS[trialIndex % FLANKER_TRIALS.length]
-}
-
-function getFeedbackText(feedback: FeedbackKind): string {
-  if (feedback === 'correct') {
-    return 'Correcto'
-  }
-
-  if (feedback === 'incorrect') {
-    return 'Incorrecto'
-  }
-
-  return 'Sin respuesta / demasiado tarde'
+  return feedback === 'correct' ? 'Correcto' : 'Error'
 }
 
 export function PracticeGame({
@@ -145,17 +35,47 @@ export function PracticeGame({
   trialLimit = PRACTICE_TRIAL_LIMIT,
   trialMs = 1_500,
   colorBlindMode,
+  onPracticeComplete,
   onComplete,
 }: PracticeGameProps) {
+  const [cptPracticeTrials] = useState<PracticeTrial[] | null>(() =>
+    game === 'cpt' ? generateCptPracticeTrials(trialLimit) : null,
+  )
+  const [stroopPracticeTrials] = useState<PracticeTrial[] | null>(() =>
+    game === 'stroop'
+      ? generateStroopPracticeTrials(trialLimit, colorBlindMode)
+      : null,
+  )
+  const [flankerPracticeTrials] = useState<PracticeTrial[] | null>(() =>
+    game === 'flanker' ? generateFlankerPracticeTrials(trialLimit) : null,
+  )
   const [trialIndex, setTrialIndex] = useState(0)
   const [feedback, setFeedback] = useState<FeedbackKind | null>(null)
+  const [lastFeedback, setLastFeedback] = useState<FeedbackKind | null>(null)
+  const [hasResponded, setHasResponded] = useState(false)
   const [isComplete, setIsComplete] = useState(false)
   const timeoutRef = useRef<number | null>(null)
-  const feedbackTimeoutRef = useRef<number | null>(null)
+  const practiceStartedAtRef = useRef(0)
+  const hasRespondedRef = useRef(false)
+  const hasNotifiedCompleteRef = useRef(false)
 
   const currentTrial = useMemo(
-    () => getPracticeTrial(game, trialIndex, colorBlindMode),
-    [colorBlindMode, game, trialIndex],
+    () =>
+      game === 'cpt' && cptPracticeTrials
+        ? cptPracticeTrials[trialIndex]
+        : game === 'stroop' && stroopPracticeTrials
+          ? stroopPracticeTrials[trialIndex]
+          : game === 'flanker' && flankerPracticeTrials
+            ? flankerPracticeTrials[trialIndex]
+        : getPracticeTrial(game, trialIndex, colorBlindMode),
+    [
+      colorBlindMode,
+      cptPracticeTrials,
+      flankerPracticeTrials,
+      game,
+      stroopPracticeTrials,
+      trialIndex,
+    ],
   )
   const gameLabel = GAME_LABELS[game]
 
@@ -166,47 +86,49 @@ export function PracticeGame({
     }
   }, [])
 
-  const finishTrial = useCallback(
-    (nextFeedback: FeedbackKind) => {
-      if (feedback || isComplete) {
-        return
+  const advanceTrial = useCallback(() => {
+    setFeedback(null)
+    setHasResponded(false)
+    hasRespondedRef.current = false
+    setTrialIndex((currentIndex) => {
+      const nextIndex = currentIndex + 1
+
+      if (nextIndex >= trialLimit) {
+        setIsComplete(true)
+        return currentIndex
       }
 
-      clearTrialTimeout()
-      setFeedback(nextFeedback)
-
-      feedbackTimeoutRef.current = window.setTimeout(() => {
-        setFeedback(null)
-        setTrialIndex((currentIndex) => {
-          const nextIndex = currentIndex + 1
-
-          if (nextIndex >= trialLimit) {
-            setIsComplete(true)
-            return currentIndex
-          }
-
-          return nextIndex
-        })
-      }, FEEDBACK_DELAY_MS)
-    },
-    [clearTrialTimeout, feedback, isComplete, trialLimit],
-  )
+      return nextIndex
+    })
+  }, [trialLimit])
 
   useEffect(() => {
-    if (feedback || isComplete) {
+    practiceStartedAtRef.current = performance.now()
+  }, [])
+
+  useEffect(() => {
+    if (isComplete) {
       return
     }
 
+    const trialDeadlineMs =
+      practiceStartedAtRef.current + (trialIndex + 1) * trialMs
+    const timeoutDelayMs = Math.max(0, trialDeadlineMs - performance.now())
+
     timeoutRef.current = window.setTimeout(() => {
-      finishTrial(currentTrial.timeoutFeedback)
-    }, trialMs)
+      if (!hasRespondedRef.current) {
+        setFeedback(currentTrial.timeoutFeedback)
+        setLastFeedback(currentTrial.timeoutFeedback)
+      }
+
+      advanceTrial()
+    }, timeoutDelayMs)
 
     return clearTrialTimeout
   }, [
+    advanceTrial,
     clearTrialTimeout,
     currentTrial.timeoutFeedback,
-    feedback,
-    finishTrial,
     isComplete,
     trialIndex,
     trialMs,
@@ -214,7 +136,7 @@ export function PracticeGame({
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
-      if (feedback || isComplete) {
+      if (isComplete) {
         return
       }
 
@@ -225,23 +147,38 @@ export function PracticeGame({
       }
 
       event.preventDefault()
-      finishTrial(event.code === currentTrial.expectedCode ? 'correct' : 'incorrect')
+
+      if (feedback || hasResponded) {
+        return
+      }
+
+      const nextFeedback =
+        event.code === currentTrial.expectedCode ? 'correct' : 'incorrect'
+      setHasResponded(true)
+      hasRespondedRef.current = true
+      setFeedback(nextFeedback)
+      setLastFeedback(nextFeedback)
     }
 
     window.addEventListener('keydown', handleKeyDown)
 
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [currentTrial, feedback, finishTrial, isComplete])
+  }, [currentTrial, feedback, hasResponded, isComplete])
 
   useEffect(() => {
     return () => {
       clearTrialTimeout()
-
-      if (feedbackTimeoutRef.current !== null) {
-        window.clearTimeout(feedbackTimeoutRef.current)
-      }
     }
   }, [clearTrialTimeout])
+
+  useEffect(() => {
+    if (!isComplete || hasNotifiedCompleteRef.current) {
+      return
+    }
+
+    hasNotifiedCompleteRef.current = true
+    onPracticeComplete?.()
+  }, [isComplete, onPracticeComplete])
 
   if (isComplete) {
     return (
@@ -251,7 +188,7 @@ export function PracticeGame({
           <h1 id="practice-complete-title">Práctica {gameLabel} completada</h1>
           <p className="description">
             Has terminado los {trialLimit} ensayos de práctica. Esta fase no se
-            ha incluido en la puntuación ni se enviará al backend.
+            ha incluido en la puntuación ni se enviará al sistema.
           </p>
           <button type="button" className="primary-action" onClick={onComplete}>
             Comenzar evaluación real
@@ -263,27 +200,15 @@ export function PracticeGame({
 
   return (
     <section className="practice-game" aria-labelledby="practice-title">
-      <div className="practice-panel">
-        <p className="eyebrow">Práctica</p>
-        <h1 id="practice-title">Práctica {gameLabel} — {trialLimit} ensayos</h1>
-        <p className="description">Esta fase no cuenta para la puntuación.</p>
-        <p className="description">
-          Recibirás feedback para familiarizarte con la tarea.
-        </p>
-
-        <div className="practice-summary" aria-live="polite">
-          <span>Ensayo {trialIndex + 1} de {trialLimit}</span>
-          <span>Feedback inmediato</span>
-        </div>
+        <div className="practice-panel">
+          <p className="eyebrow">Práctica</p>
+          <h1 id="practice-title">Práctica {gameLabel} — {trialLimit} ensayos</h1>
 
         <div className="practice-stimulus" aria-live="assertive">
           {currentTrial.flankerParts ? (
             <span className="practice-flanker" aria-label={currentTrial.stimulus}>
               {currentTrial.flankerParts.map((arrow, index) => (
-                <span
-                  className={index === 2 ? 'central-arrow' : undefined}
-                  key={`${arrow}-${index}`}
-                >
+                <span key={`${arrow}-${index}`}>
                   {arrow}
                 </span>
               ))}
@@ -295,22 +220,28 @@ export function PracticeGame({
           )}
         </div>
 
-        <div className="practice-controls" aria-label={`Controles práctica ${gameLabel}`}>
-          {currentTrial.controls.map((control) => (
-            <span key={control}>{control}</span>
-          ))}
-        </div>
-
-        {feedback && (
-          <p
-            className={`form-message practice-feedback ${
-              feedback === 'correct' ? 'success-message' : 'error-message'
-            }`}
-            role="status"
-          >
-            {getFeedbackText(feedback)}
-          </p>
+        {game === 'flanker' && currentTrial.controls.length > 0 && (
+          <div className="practice-controls" aria-label={`Controles práctica ${gameLabel}`}>
+            {currentTrial.controls.map((control) => (
+              <span key={control}>{control}</span>
+            ))}
+          </div>
         )}
+
+        <p
+          aria-live="polite"
+          className={`practice-feedback practice-feedback-slot ${
+            lastFeedback === 'correct'
+              ? 'practice-feedback-slot--correct'
+              : lastFeedback
+                ? 'practice-feedback-slot--error'
+                : ''
+          }`}
+          data-testid={`${game}-practice-feedback`}
+          role="status"
+        >
+          {getPracticeFeedbackText(lastFeedback)}
+        </p>
       </div>
     </section>
   )

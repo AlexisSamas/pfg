@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.models.access_decision import AccessDecision
 from app.models.exam_session import ExamSession
+from app.models.scoring_result import ScoringResult
 from app.models.user import User
 from app.models.wait_period import WaitPeriod
 from app.schemas.dashboard import DashboardUserStatus, ManualGrantRequest
@@ -30,19 +31,44 @@ def _scoring_result_time(session: ExamSession):
     return session.scoring_result.computed_at or session.completed_at or session.started_at
 
 
-def _manual_grant_is_after_session(
+def _manual_grant_is_after_time(
     manual_decision: AccessDecision | None,
-    session: ExamSession,
+    reference_time: datetime | None,
 ) -> bool:
     if manual_decision is None:
         return False
 
     manual_time = _manual_grant_time(manual_decision)
-    scoring_time = _scoring_result_time(session)
-    if manual_time is None or scoring_time is None:
+    if manual_time is None or reference_time is None:
         return True
 
-    return manual_time > scoring_time
+    return manual_time >= reference_time
+
+
+def _latest_scoring_time(sessions: list[ExamSession]) -> datetime | None:
+    scored_times = [
+        _scoring_result_time(session)
+        for session in sessions
+        if session.scoring_result is not None
+    ]
+    scored_times = [scoring_time for scoring_time in scored_times if scoring_time is not None]
+
+    return max(scored_times) if scored_times else None
+
+
+def _latest_scored_session(sessions: list[ExamSession]) -> ExamSession | None:
+    scored_sessions = [session for session in sessions if session.scoring_result is not None]
+    if not scored_sessions:
+        return None
+
+    return max(
+        scored_sessions,
+        key=lambda session: (
+            _scoring_result_time(session) or datetime.min,
+            session.attempt_number or 0,
+            session.id or 0,
+        ),
+    )
 
 
 def get_context_user_statuses(
@@ -62,14 +88,16 @@ def get_context_user_statuses(
         .all()
     )
 
-    latest_by_user = {}
+    sessions_by_user = {}
     for session in sessions:
-        latest_by_user.setdefault(session.user_id, session)
+        sessions_by_user.setdefault(session.user_id, []).append(session)
 
     now = datetime.utcnow()
     statuses = []
-    for session in latest_by_user.values():
-        scoring_result = session.scoring_result
+    for user_sessions in sessions_by_user.values():
+        session = user_sessions[0]
+        result_session = _latest_scored_session(user_sessions) or session
+        scoring_result = result_session.scoring_result
         active_wait = (
             db.query(WaitPeriod)
             .filter(
@@ -95,9 +123,9 @@ def get_context_user_statuses(
             .order_by(desc(AccessDecision.consumed_at), desc(AccessDecision.decided_at), desc(AccessDecision.id))
             .first()
         )
-        manual_grant = _manual_grant_is_after_session(
+        manual_grant = _manual_grant_is_after_time(
             manual_decision=manual_decision,
-            session=session,
+            reference_time=_latest_scoring_time(user_sessions),
         )
 
         updated_at = None
@@ -150,7 +178,24 @@ def grant_manual_access(
             f"Usuario {request.user_id} no encontrado"
         )
 
-    session = (
+    scored_session = (
+        db.query(ExamSession)
+        .join(ScoringResult)
+        .filter(
+            and_(
+                ExamSession.user_id == request.user_id,
+                ExamSession.context_id == request.context_id,
+            )
+        )
+        .order_by(
+            desc(ScoringResult.computed_at),
+            desc(ExamSession.completed_at),
+            desc(ExamSession.attempt_number),
+            desc(ExamSession.id),
+        )
+        .first()
+    )
+    latest_session = (
         db.query(ExamSession)
         .filter(
             and_(
@@ -165,6 +210,7 @@ def grant_manual_access(
         )
         .first()
     )
+    session = scored_session or latest_session
     if session is None:
         raise DashboardNotFoundException(
             "No hay sesion para ese usuario y contexto"

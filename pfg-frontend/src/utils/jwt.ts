@@ -1,8 +1,9 @@
-import type { LastEvaluationClaim } from '../types'
+import type { AttemptContextClaim, LastEvaluationClaim } from '../types'
 
 export type UserRole = 'student' | 'instructor'
 
 type JwtPayload = {
+  attempts_by_context?: AttemptContextClaim[] | null
   last_evaluation?: RawLastEvaluationClaim | null
   role?: string | null
 }
@@ -56,6 +57,26 @@ export function getLastEvaluationFromToken(
         ? lastEvaluation.wait_until
         : lastEvaluation.waitUntil ?? null,
   }
+}
+
+export function getAttemptContextFromToken(
+  token: string | null,
+  contextId: string,
+): AttemptContextClaim | null {
+  if (!token) {
+    return null
+  }
+
+  const attemptsByContext = decodeJwtPayload(token)?.attempts_by_context
+
+  if (!Array.isArray(attemptsByContext)) {
+    return null
+  }
+
+  return (
+    attemptsByContext.find((attempts) => attempts.context_id === contextId) ??
+    null
+  )
 }
 
 export function getUserRoleFromToken(token: string | null): UserRole | null {

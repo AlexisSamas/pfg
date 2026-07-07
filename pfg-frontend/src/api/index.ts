@@ -9,6 +9,7 @@ import type {
   ScoringResult,
   SessionCreate,
   SessionResponse,
+  StudentStatusResponse,
   WaitResponse,
 } from '../types'
 import { apiClient } from './client'
@@ -17,6 +18,22 @@ export { API_TOKEN_STORAGE_KEY, apiClient, getStoredToken } from './client'
 
 export async function login(credentials: LoginRequest): Promise<AuthToken> {
   const response = await apiClient.post<AuthToken>('/auth/token', credentials)
+
+  return response.data
+}
+
+export async function refreshToken(): Promise<AuthToken> {
+  const response = await apiClient.get<AuthToken>('/auth/refresh')
+
+  return response.data
+}
+
+export async function getStudentStatus(
+  contextId: string,
+): Promise<StudentStatusResponse> {
+  const response = await apiClient.get<StudentStatusResponse>(
+    `/auth/status/${encodeURIComponent(contextId)}`,
+  )
 
   return response.data
 }

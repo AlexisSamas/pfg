@@ -29,34 +29,6 @@
   background: var(--surface-muted);
 }
 
-.flanker-counts {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 10px;
-  margin: 0 auto 24px;
-  max-width: 760px;
-}
-
-.flanker-counts div {
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface-muted);
-}
-
-.flanker-counts dt {
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.flanker-counts dd {
-  margin: 4px 0 0;
-  color: var(--text-strong);
-  font-size: 24px;
-  font-weight: 800;
-}
-
 .flanker-arrows {
   display: flex;
   justify-content: center;
@@ -71,11 +43,6 @@
   font-size: 72px;
   font-weight: 900;
   line-height: 1;
-}
-
-.central-arrow {
-  color: var(--accent);
-  transform: scale(1.12);
 }
 
 .flanker-controls {
@@ -98,10 +65,6 @@
 @media (max-width: 640px) {
   .flanker-game {
     padding: 28px 18px;
-  }
-
-  .flanker-counts {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .flanker-arrows {

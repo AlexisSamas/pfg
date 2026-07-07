@@ -4,23 +4,18 @@ import type { GameEvent } from '../../types'
 import './StroopGame.css'
 import {
   getAvailableStroopColors,
-  getDifferentStroopColor,
   keyToStroopColor,
   STROOP_COLORS,
   type ColorBlindMode,
-  type StroopColorKey,
 } from './stroopColors'
+import {
+  createStroopStimulus,
+  type GeneratedStroopStimulus,
+  type StroopPattern,
+  type StroopStimulusType,
+} from './stimulusGenerators'
 
 type StroopEventType = 'correct' | 'error' | 'timeout'
-type StroopStimulusType = 'congruent' | 'incongruent'
-
-type StroopEventCounts = {
-  correct: number
-  error: number
-  timeout: number
-  congruent: number
-  incongruent: number
-}
 
 type StroopEvent = GameEvent & {
   game_type: 'stroop'
@@ -28,13 +23,7 @@ type StroopEvent = GameEvent & {
   stimulus_type: StroopStimulusType
 }
 
-type StroopStimulus = {
-  word: StroopColorKey
-  ink: StroopColorKey
-  stimulusType: StroopStimulusType
-  startedAt: number
-  responded: boolean
-}
+type StroopStimulus = GeneratedStroopStimulus
 
 type StroopGameProps = {
   durationMs?: number
@@ -44,46 +33,13 @@ type StroopGameProps = {
   onComplete?: (events: GameEvent[]) => void
 }
 
-const INITIAL_COUNTS: StroopEventCounts = {
-  correct: 0,
-  error: 0,
-  timeout: 0,
-  congruent: 0,
-  incongruent: 0,
-}
-
-function getRandomColor(availableColors: StroopColorKey[]): StroopColorKey {
-  const index = Math.floor(Math.random() * availableColors.length)
-
-  return availableColors[index]
-}
-
-function createStimulus(
-  incongruentProbability: number,
-  availableColors: StroopColorKey[],
-): StroopStimulus {
-  const word = getRandomColor(availableColors)
-  const isIncongruent = Math.random() < incongruentProbability
-  const ink = isIncongruent
-    ? getDifferentStroopColor(word, availableColors)
-    : word
-
-  return {
-    word,
-    ink,
-    stimulusType: isIncongruent ? 'incongruent' : 'congruent',
-    startedAt: performance.now(),
-    responded: false,
-  }
-}
-
 function toTimestampUs(timestampMs: number): number {
   return Math.round(timestampMs * 1000)
 }
 
 export function StroopGame({
   durationMs = 15_000,
-  trialMs = 1_500,
+  trialMs = 1_000,
   incongruentProbability = 0.5,
   colorBlindMode,
   onComplete,
@@ -96,8 +52,6 @@ export function StroopGame({
   const [stimulus, setStimulus] = useState<StroopStimulus | null>(null)
   const [timeRemainingMs, setTimeRemainingMs] = useState(durationMs)
   const [isFinished, setIsFinished] = useState(false)
-  const [eventCount, setEventCount] = useState(0)
-  const [counts, setCounts] = useState<StroopEventCounts>(INITIAL_COUNTS)
 
   const eventsRef = useRef<GameEvent[]>([])
   const stimulusRef = useRef<StroopStimulus | null>(null)
@@ -105,6 +59,8 @@ export function StroopGame({
   const countdownRef = useRef<number | null>(null)
   const startedAtRef = useRef(0)
   const finishedRef = useRef(false)
+  const trialIndexRef = useRef(0)
+  const previousPatternRef = useRef<StroopPattern | null>(null)
   const onCompleteRef = useRef(onComplete)
 
   useEffect(() => {
@@ -115,15 +71,11 @@ export function StroopGame({
     startedAtRef.current = performance.now()
     eventsRef.current = []
     finishedRef.current = false
+    trialIndexRef.current = 0
+    previousPatternRef.current = null
 
     function recordEvent(event: StroopEvent) {
       eventsRef.current = [...eventsRef.current, event]
-      setEventCount(eventsRef.current.length)
-      setCounts((currentCounts) => ({
-        ...currentCounts,
-        [event.event_type]: currentCounts[event.event_type] + 1,
-        [event.stimulus_type]: currentCounts[event.stimulus_type] + 1,
-      }))
       addEvents([event])
     }
 
@@ -163,12 +115,13 @@ export function StroopGame({
       }
     }
 
-    function scheduleNextTrial() {
+    function scheduleNextTrial(trialIndex = trialIndexRef.current) {
       if (finishedRef.current) {
         return
       }
 
-      const elapsedMs = performance.now() - startedAtRef.current
+      const startTime = startedAtRef.current
+      const elapsedMs = performance.now() - startTime
       const remainingMs = durationMs - elapsedMs
 
       if (remainingMs <= 0) {
@@ -176,9 +129,23 @@ export function StroopGame({
         return
       }
 
-      const nextStimulus = createStimulus(incongruentProbability, availableColors)
+      const nextStimulus = createStroopStimulus(
+        incongruentProbability,
+        availableColors,
+        previousPatternRef.current,
+      )
+      previousPatternRef.current = {
+        word: nextStimulus.word,
+        ink: nextStimulus.ink,
+      }
       stimulusRef.current = nextStimulus
       setStimulus(nextStimulus)
+
+      const trialDeadlineMs = Math.min(
+        startTime + (trialIndex + 1) * trialMs,
+        startTime + durationMs,
+      )
+      const timeoutDelayMs = Math.max(0, trialDeadlineMs - performance.now())
 
       trialTimeoutRef.current = window.setTimeout(() => {
         const currentStimulus = stimulusRef.current
@@ -192,8 +159,15 @@ export function StroopGame({
         }
 
         stimulusRef.current = null
-        scheduleNextTrial()
-      }, Math.min(trialMs, remainingMs))
+        trialIndexRef.current = trialIndex + 1
+
+        if (trialDeadlineMs >= startedAtRef.current + durationMs) {
+          finishGame()
+          return
+        }
+
+        scheduleNextTrial(trialIndex + 1)
+      }, timeoutDelayMs)
     }
 
     function handleKeyDown(event: KeyboardEvent) {
@@ -251,38 +225,11 @@ export function StroopGame({
       <div className="stroop-header">
         <p className="eyebrow">Stroop</p>
         <h1 id="stroop-title">Tarea de color e inhibición</h1>
-        <p className="description">
-          Responde al color de la tinta, no al texto de la palabra.
-        </p>
       </div>
 
       <div className="stroop-status" aria-live="polite">
         <span>Tiempo restante: {Math.ceil(timeRemainingMs / 1000)} s</span>
-        <span>Eventos generados: {eventCount}</span>
       </div>
-
-      <dl className="stroop-counts" aria-label="Eventos Stroop acumulados">
-        <div>
-          <dt>correct</dt>
-          <dd>{counts.correct}</dd>
-        </div>
-        <div>
-          <dt>error</dt>
-          <dd>{counts.error}</dd>
-        </div>
-        <div>
-          <dt>timeout</dt>
-          <dd>{counts.timeout}</dd>
-        </div>
-        <div>
-          <dt>congruent</dt>
-          <dd>{counts.congruent}</dd>
-        </div>
-        <div>
-          <dt>incongruent</dt>
-          <dd>{counts.incongruent}</dd>
-        </div>
-      </dl>
 
       <div className="stroop-word" aria-live="assertive">
         {isFinished || !stimulus ? (
@@ -292,12 +239,6 @@ export function StroopGame({
             {STROOP_COLORS[stimulus.word].label}
           </span>
         )}
-      </div>
-
-      <div className="stroop-controls" aria-label="Controles Stroop">
-        {availableColors.map((color) => (
-          <span key={color}>{STROOP_COLORS[color].controlLabel}</span>
-        ))}
       </div>
 
       {isFinished && (

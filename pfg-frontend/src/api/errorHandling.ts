@@ -56,7 +56,7 @@ export function parseApiError(error: unknown): ApiErrorInfo {
     waitUntil: detail.wait_until,
     requiresManualGrant: detail.requires_manual_grant,
     message:
-      'No se pudo completar la operación. Comprueba la conexión con el backend e inténtalo de nuevo.',
+      'No se pudo completar la operación. Comprueba la conexión e inténtalo de nuevo.',
   }
 
   if (status === 401) {

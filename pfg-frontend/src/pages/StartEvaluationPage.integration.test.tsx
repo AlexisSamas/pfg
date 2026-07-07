@@ -65,7 +65,7 @@ vi.mock('../components', async () => {
       <section>
         <h2>{title}</h2>
         <button type="button" onClick={onStart}>
-          Empezar práctica
+          Comenzar práctica
         </button>
       </section>
     ),
@@ -142,7 +142,7 @@ vi.mock('../components', async () => {
 const session: SessionResponse = {
   id: 42,
   user_id: 7,
-  context_id: 'exam_demo_01',
+  context_id: 'exam_test_01',
   attempt_number: 1,
   started_at: '2026-06-10T10:00:00',
   completed_at: null,
@@ -184,6 +184,7 @@ function renderStudentFlow() {
 describe('integración del flujo alumno', () => {
   beforeEach(() => {
     localStorage.clear()
+    sessionStorage.clear()
     mocks.createSession.mockReset()
     mocks.getResult.mockReset()
     mocks.getWait.mockReset()
@@ -201,14 +202,14 @@ describe('integración del flujo alumno', () => {
       screen.getByRole('heading', { name: /Iniciar evaluación cognitiva/i }),
     ).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: /Iniciar evaluación/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Realizar intento/i }))
 
     expect(await screen.findByText(/CPT: atención sostenida/i)).toBeInTheDocument()
     expect(mocks.createSession).toHaveBeenCalledWith({
-      context_id: 'exam_demo_01',
+      context_id: 'exam_test_10',
     })
 
-    fireEvent.click(screen.getByRole('button', { name: /Empezar práctica/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Comenzar práctica/i }))
     expect(screen.getByText('Práctica cpt')).toBeInTheDocument()
     expect(mocks.sendEvents).not.toHaveBeenCalled()
 
@@ -220,15 +221,16 @@ describe('integración del flujo alumno', () => {
       screen.getByRole('combobox', { name: /Gama de color a excluir/i }),
       { target: { value: 'red' } },
     )
+    fireEvent.click(screen.getByRole('button', { name: /Confirmar/i }))
 
-    fireEvent.click(screen.getByRole('button', { name: /Empezar práctica/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Comenzar práctica/i }))
     fireEvent.click(
       screen.getByRole('button', { name: /Terminar práctica stroop/i }),
     )
     fireEvent.click(screen.getByRole('button', { name: /Completar Stroop real/i }))
     fireEvent.click(screen.getByRole('button', { name: /Continuar a Flanker/i }))
 
-    fireEvent.click(screen.getByRole('button', { name: /Empezar práctica/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Comenzar práctica/i }))
     fireEvent.click(
       screen.getByRole('button', { name: /Terminar práctica flanker/i }),
     )

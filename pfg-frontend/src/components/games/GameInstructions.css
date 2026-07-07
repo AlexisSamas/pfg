@@ -8,6 +8,11 @@
   text-align: center;
 }
 
+.game-instructions--compact {
+  padding-top: 32px;
+  padding-bottom: 32px;
+}
+
 .controls-panel {
   margin: 28px auto 0;
   padding: 22px;
@@ -31,6 +36,24 @@
 
 .controls-panel li + li {
   margin-top: 8px;
+}
+
+.game-instructions--compact .controls-panel {
+  margin-top: 24px;
+  padding-top: 19px;
+  padding-bottom: 19px;
+}
+
+.game-instructions--compact .controls-panel h2 {
+  margin-bottom: 12px;
+}
+
+.game-instructions--compact .controls-panel li + li {
+  margin-top: 6px;
+}
+
+.game-instructions--compact .primary-action {
+  margin-top: 24px;
 }
 
 @media (max-width: 640px) {

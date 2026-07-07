@@ -11,13 +11,17 @@ export type FlowStep = (typeof FLOW_STEPS)[number]['id']
 
 type FlowProgressProps = {
   currentStep: FlowStep
+  className?: string
 }
 
-export function FlowProgress({ currentStep }: FlowProgressProps) {
+export function FlowProgress({ className, currentStep }: FlowProgressProps) {
   const currentIndex = FLOW_STEPS.findIndex((step) => step.id === currentStep)
+  const progressClassName = ['flow-progress', className]
+    .filter(Boolean)
+    .join(' ')
 
   return (
-    <ol className="flow-progress" aria-label="Progreso del flujo">
+    <ol className={progressClassName} aria-label="Progreso del flujo">
       {FLOW_STEPS.map((step, index) => {
         const status =
           index < currentIndex
